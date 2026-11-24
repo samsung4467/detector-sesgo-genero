@@ -1,0 +1,5 @@
+{
+  "model_key": "random_forest",
+  "display_name": "Random Forest",
+  "selection_criterion": "f1_macro (test set)"
+}
