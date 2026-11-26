@@ -301,6 +301,107 @@ st.markdown(
             font-weight: 700;
             line-height: 1.25;
         }
+        /* Banners explicativos del motor híbrido y panel de explicabilidad ML */
+        .hybrid-banner-info {
+            background-color: #F0F9FF;
+            border: 1px solid #BAE6FD;
+            border-left: 4px solid #0284C7;
+            border-radius: 10px;
+            padding: 11px 15px;
+            margin: 10px 0 4px 0;
+            color: #0C4A6E;
+            font-size: 0.88rem;
+            line-height: 1.5;
+        }
+        .hybrid-banner-warn {
+            background-color: #FFFBEB;
+            border: 1px solid #FDE68A;
+            border-left: 4px solid #D97706;
+            border-radius: 10px;
+            padding: 11px 15px;
+            margin: 10px 0 4px 0;
+            color: #78350F;
+            font-size: 0.88rem;
+            line-height: 1.5;
+        }
+        .ml-exp-header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .ml-rel-pill {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 700;
+        }
+        .ml-diag-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .ml-diag-box {
+            background-color: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-radius: 8px;
+            padding: 7px 10px;
+        }
+        .ml-diag-label {
+            font-size: 0.71rem;
+            color: #64748B;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+        .ml-diag-val {
+            font-size: 0.96rem;
+            font-weight: 700;
+            color: #0F172A;
+            margin-top: 2px;
+        }
+        .ml-diag-sub {
+            font-size: 0.72rem;
+            color: #475569;
+        }
+        .ml-term-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 0.82rem;
+            color: #1E293B;
+        }
+        .ml-term-name {
+            min-width: 125px;
+            max-width: 44%;
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .ml-term-bar-bg {
+            flex: 1;
+            height: 8px;
+            background-color: #E2E8F0;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .ml-term-bar-fill {
+            height: 100%;
+            border-radius: 999px;
+        }
+        .ml-term-weight {
+            min-width: 72px;
+            text-align: right;
+            font-size: 0.74rem;
+            color: #475569;
+            font-variant-numeric: tabular-nums;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -464,10 +565,10 @@ def render_mini_ml_comparison_table(comp_results) -> str:
     }
     rows_html = []
     for m_name, m_res in comp_results:
-        pred_cat = m_res.predicted_class
+        pred_cat = m_res.raw_ml_category
         meta = CATEGORY_INFO[pred_cat]
         pred_badge = (
-            f'<span class="mini-pred-pill" title="{html.escape(pred_cat)}" '
+            f'<span class="mini-pred-pill" title="Predicción cruda ML: {html.escape(pred_cat)}" '
             f'style="background:{meta["bg"]}; color:{meta["text"]}; '
             f'border:1px solid {meta["border"]};">{html.escape(short_preds[pred_cat])}</span>'
         )
@@ -492,8 +593,8 @@ def render_mini_ml_comparison_table(comp_results) -> str:
         '<div class="mini-ml-wrap">'
         '<table class="mini-ml-table">'
         "<colgroup>"
-        '<col style="width:21%;">'
-        '<col style="width:13%;">'
+        '<col style="width:20%;">'
+        '<col style="width:14%;">'
         '<col style="width:11%;">'
         '<col style="width:11%;">'
         '<col style="width:11%;">'
@@ -503,12 +604,126 @@ def render_mini_ml_comparison_table(comp_results) -> str:
         "</colgroup>"
         "<thead><tr>"
         "<th>Modelo</th>"
-        "<th>Pred.</th>"
+        '<th title="Predicción cruda del clasificador ML">Pred. ML</th>'
         f"{header_cells}"
         "</tr></thead>"
         f"<tbody>{''.join(rows_html)}</tbody>"
         "</table></div>"
     )
+
+
+def render_hybrid_status_banner(analysis) -> str:
+    """Renderiza un aviso explicativo limpio cuando aplica calibración OOD o alerta de sesgo implícito."""
+    explanation = html.escape(analysis.decision_explanation)
+    if analysis.decision_mode == "ml_implicit_bias":
+        return (
+            '<div class="hybrid-banner-warn">'
+            "<strong>⚠️ Alerta de posible sesgo implícito (patrón estadístico ML):</strong> "
+            f"{explanation}"
+            "</div>"
+        )
+    if analysis.decision_mode == "calibrated_neutral":
+        return (
+            '<div class="hybrid-banner-info">'
+            "<strong>ℹ️ Calibración híbrida aplicada (baja confianza ML / vocabulario fuera de dominio):</strong> "
+            f"{explanation}"
+            "</div>"
+        )
+    if analysis.decision_mode == "lexical_explicit" and analysis.predicted_class != analysis.raw_ml_category:
+        return (
+            '<div class="hybrid-banner-info">'
+            "<strong>ℹ️ Priorización de evidencia léxica explícita:</strong> "
+            f"{explanation}"
+            "</div>"
+        )
+    return ""
+
+
+def render_ml_explainability_html(analysis) -> str:
+    """Renderiza métricas de incertidumbre, cobertura TF-IDF y términos influyentes del clasificador ML."""
+    rel_styles = {
+        "alta": ("#DCFCE7", "#166534", "#86EFAC"),
+        "media": ("#FEF3C7", "#92400E", "#FCD34D"),
+        "baja": ("#FEE2E2", "#991B1B", "#FCA5A5"),
+    }
+    bg, fg, border = rel_styles.get(analysis.ml_reliability, ("#F1F5F9", "#334155", "#CBD5E1"))
+    raw_meta = CATEGORY_INFO.get(analysis.raw_ml_category, CATEGORY_INFO["Neutro"])
+    bar_color = raw_meta["color"]
+
+    header_html = (
+        '<div class="ml-exp-header">'
+        f'<span class="ml-rel-pill" style="background:{bg}; color:{fg}; border:1px solid {border};">'
+        f"Confiabilidad ML: {html.escape(analysis.ml_reliability_label)}</span>"
+        f'<span style="font-size:0.78rem; color:#475569;">'
+        f'Señal cruda: <strong style="color:{raw_meta["text"]};">{html.escape(analysis.raw_ml_category)}</strong> '
+        f"({analysis.ml_confidence * 100:.1f}%)</span>"
+        "</div>"
+    )
+
+    cov_pct = analysis.vocabulary_coverage * 100.0
+    diag_grid_html = (
+        '<div class="ml-diag-grid">'
+        '<div class="ml-diag-box">'
+        '<div class="ml-diag-label">Cobertura TF-IDF</div>'
+        f'<div class="ml-diag-val">{cov_pct:.1f}%</div>'
+        f'<div class="ml-diag-sub">{analysis.recognized_tokens}/{analysis.total_tokens} tokens · '
+        f"{analysis.matched_features} n-gramas</div>"
+        "</div>"
+        '<div class="ml-diag-box">'
+        '<div class="ml-diag-label">Confianza máx. ML</div>'
+        f'<div class="ml-diag-val">{analysis.ml_confidence * 100:.1f}%</div>'
+        f'<div class="ml-diag-sub">Clase cruda: {html.escape(analysis.raw_ml_category)}</div>'
+        "</div>"
+        '<div class="ml-diag-box">'
+        '<div class="ml-diag-label">Margen (Top1 − Top2)</div>'
+        f'<div class="ml-diag-val">{analysis.ml_margin * 100:.1f}%</div>'
+        '<div class="ml-diag-sub">Separación entre clases</div>'
+        "</div>"
+        '<div class="ml-diag-box">'
+        '<div class="ml-diag-label">Entropía normalizada</div>'
+        f'<div class="ml-diag-val">{analysis.ml_entropy:.2f}</div>'
+        '<div class="ml-diag-sub">0.00 certeza · 1.00 dispersión</div>'
+        "</div>"
+        "</div>"
+    )
+
+    if analysis.influential_terms:
+        term_rows = []
+        for item in analysis.influential_terms:
+            width_pct = max(8.0, min(100.0, item.influence_score * 100.0))
+            node_tag = (
+                ' <span style="font-size:0.66rem; background:#EEF2FF; color:#3730A3; '
+                'padding:1px 5px; border-radius:4px; font-weight:600;">nodo activo</span>'
+                if item.source == "ruta_arbol"
+                else ""
+            )
+            term_rows.append(
+                '<div class="ml-term-row">'
+                f'<div class="ml-term-name" title="{html.escape(item.term)}">'
+                f"{html.escape(item.term)}{node_tag}</div>"
+                '<div class="ml-term-bar-bg">'
+                f'<div class="ml-term-bar-fill" style="width:{width_pct:.1f}%; background:{bar_color};"></div>'
+                "</div>"
+                f'<div class="ml-term-weight">TF-IDF {item.tfidf_weight:.2f}</div>'
+                "</div>"
+            )
+        terms_html = (
+            '<div style="font-size:0.82rem; font-weight:700; color:#1E293B; margin-bottom:2px;">'
+            f"Términos del aviso que más influyeron en {html.escape(analysis.model_name)}"
+            "</div>"
+            f'<div style="font-size:0.74rem; color:#64748B; margin-bottom:8px;">'
+            f"Método: {html.escape(analysis.explainability_method)}</div>"
+            + "".join(term_rows)
+        )
+    else:
+        terms_html = (
+            '<div style="font-size:0.82rem; color:#64748B; background:#F8FAFC; '
+            'border:1px solid #E2E8F0; border-radius:8px; padding:8px 10px;">'
+            "Ningún término del texto coincide con el vocabulario entrenado del vectorizador TF-IDF."
+            "</div>"
+        )
+
+    return header_html + diag_grid_html + terms_html
 
 
 def render_changes_html_table(changes) -> str:
@@ -705,13 +920,38 @@ with tab_analyzer:
                     f'<strong>Sesgo múltiple detectado:</strong> {html.escape(cats_str)}'
                     "</div>"
                 )
+            if analysis.decision_mode == "calibrated_neutral":
+                if analysis.raw_ml_category != "Neutro":
+                    kpi1_sub = (
+                        f"Calibrado · ML crudo: {html.escape(analysis.raw_ml_category)} "
+                        f"({analysis.ml_confidence * 100:.1f}%)"
+                    )
+                else:
+                    kpi1_sub = (
+                        f"Calibrado · Cobertura TF-IDF: {analysis.vocabulary_coverage * 100:.0f}%"
+                    )
+            elif analysis.decision_mode == "ml_implicit_bias":
+                kpi1_sub = (
+                    f"Sesgo implícito ML ({analysis.ml_confidence * 100:.1f}%) · Sin frases explícitas"
+                )
+            elif analysis.decision_mode == "lexical_explicit" and analysis.predicted_class != analysis.raw_ml_category:
+                kpi1_sub = (
+                    f"Evidencia léxica · ML crudo: {html.escape(analysis.raw_ml_category)} "
+                    f"({analysis.ml_confidence * 100:.1f}%)"
+                )
+            else:
+                kpi1_sub = (
+                    f"Confianza ML: {analysis.probabilities[analysis.predicted_class] * 100:.1f}% · "
+                    f"Cobertura: {analysis.vocabulary_coverage * 100:.0f}%"
+                )
+
             st.markdown(
                 f'<div class="kpi-card" style="background:{pred_meta["bg"]}; '
                 f'border:1px solid {pred_meta["border"]};">'
-                f'<div class="kpi-card-label">CATEGORÍA PREDICHA (ML)</div>'
+                f'<div class="kpi-card-label">DIAGNÓSTICO HÍBRIDO</div>'
                 f'<div class="kpi-card-value" style="color:{pred_meta["text"]};">'
-                f'{analysis.predicted_class}</div>'
-                f'<div class="kpi-card-sub">Confianza: {analysis.probabilities[analysis.predicted_class]*100:.1f}%</div>'
+                f"{html.escape(analysis.predicted_class)}</div>"
+                f'<div class="kpi-card-sub">{kpi1_sub}</div>'
                 f"{multi_bias_html}"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -721,16 +961,25 @@ with tab_analyzer:
         with kpi3:
             st.metric("Nivel de Riesgo", analysis.risk_level)
         with kpi4:
+            if analysis.spans:
+                kpi4_delta = f"{len(analysis.detected_categories)} categoría(s)"
+                kpi4_delta_color = "inverse"
+            elif analysis.decision_mode == "ml_implicit_bias":
+                kpi4_delta = "Sesgo implícito ML"
+                kpi4_delta_color = "off"
+            else:
+                kpi4_delta = "Sin alertas léxicas"
+                kpi4_delta_color = "normal"
             st.metric(
                 "Frases Sesgadas Detectadas",
                 f"{len(analysis.spans)}",
-                delta=(
-                    f"{len(analysis.detected_categories)} categoría(s)"
-                    if analysis.spans
-                    else "Sin alertas léxicas"
-                ),
-                delta_color="inverse" if analysis.spans else "normal",
+                delta=kpi4_delta,
+                delta_color=kpi4_delta_color,
             )
+
+        banner_html = render_hybrid_status_banner(analysis)
+        if banner_html:
+            st.markdown(banner_html, unsafe_allow_html=True)
 
         st.markdown("")
         col_left, col_right = st.columns([1.25, 1.0], gap="large")
@@ -741,6 +990,18 @@ with tab_analyzer:
             st.markdown(analysis.highlighted_html, unsafe_allow_html=True)
             if analysis.spans:
                 st.caption("Pasa el cursor sobre cualquier frase resaltada para ver la explicación y sugerencia.")
+            elif analysis.decision_mode == "ml_implicit_bias":
+                st.warning(
+                    "No se detectaron frases sesgadas explícitas en el texto, pero el clasificador ML "
+                    "identificó un posible patrón estadístico implícito. Revisa los términos influyentes "
+                    "en el panel derecho."
+                )
+            elif analysis.decision_mode == "calibrated_neutral":
+                st.success(
+                    "No se detectaron frases sesgadas explícitas en el texto analizado. "
+                    "El motor híbrido calibró el diagnóstico final a Neutro ante la baja confianza "
+                    "estadística o vocabulario fuera de dominio del modelo ML."
+                )
             else:
                 st.success("No se detectaron frases sesgadas explícitas en el texto analizado.")
 
@@ -758,10 +1019,16 @@ with tab_analyzer:
             st.markdown(
                 f'<div style="padding:10px 14px; border-radius:8px; background:{neutro_meta["bg"]}; '
                 f'border:1px solid {neutro_meta["border"]}; color:{neutro_meta["text"]}; margin-bottom:12px;">'
-                f'<strong>Probabilidad clase Neutro / Inclusivo:</strong> {neutro_pct:.2f}%'
+                f'<strong>Probabilidad clase Neutro / Inclusivo (ML crudo):</strong> {neutro_pct:.2f}%'
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+            with st.expander(
+                f"🔬 Explicabilidad ML y cobertura TF-IDF ({analysis.vocabulary_coverage * 100:.0f}% reconocido)",
+                expanded=analysis.decision_mode in ("ml_implicit_bias", "calibrated_neutral"),
+            ):
+                st.markdown(render_ml_explainability_html(analysis), unsafe_allow_html=True)
 
             with st.expander("🤖 Comparar predicción entre los 3 modelos ML en esta oferta", expanded=True):
                 comp_results = []
@@ -773,6 +1040,15 @@ with tab_analyzer:
                     )
                     comp_results.append((m_name, m_res))
                 st.markdown(render_mini_ml_comparison_table(comp_results), unsafe_allow_html=True)
+                if any(
+                    m_res.decision_mode == "calibrated_neutral"
+                    or m_res.predicted_class != m_res.raw_ml_category
+                    for _, m_res in comp_results
+                ):
+                    st.caption(
+                        "Por transparencia académica, esta tabla conserva la predicción y probabilidades "
+                        "crudas de cada clasificador ML; el diagnóstico principal aplica la calibración híbrida."
+                    )
 
             if analysis.technical_terms:
                 st.markdown("#### 🛠️ Requisitos técnicos identificados (protegidos)")
