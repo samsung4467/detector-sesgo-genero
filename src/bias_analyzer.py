@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass, field
 import html
 import json
+import math
 import re
-from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
 import joblib
@@ -19,7 +21,7 @@ from src.config import (
     MODEL_DISPLAY_NAMES,
     MODELS_DIR,
 )
-from src.text_utils import fold_accents_1to1
+from src.text_utils import SPANISH_MINIMAL_STOPWORDS, fold_accents_1to1, normalize_for_ml
 
 
 @dataclass
@@ -30,6 +32,14 @@ class DetectedSpan:
     category: str
     explanation: str
     suggestion: str
+
+
+@dataclass
+class MLInfluentialTerm:
+    term: str
+    tfidf_weight: float
+    influence_score: float
+    source: str
 
 
 @dataclass
@@ -45,6 +55,20 @@ class AnalysisResult:
     highlighted_html: str
     detected_categories: List[str]
     technical_terms: List[str]
+    raw_ml_category: str = "Neutro"
+    ml_confidence: float = 0.0
+    ml_margin: float = 0.0
+    ml_entropy: float = 0.0
+    vocabulary_coverage: float = 0.0
+    recognized_tokens: int = 0
+    total_tokens: int = 0
+    matched_features: int = 0
+    ml_reliability: str = "alta"
+    ml_reliability_label: str = "Alta"
+    decision_mode: str = "neutral_confirmed"
+    decision_explanation: str = ""
+    influential_terms: List[MLInfluentialTerm] = field(default_factory=list)
+    explainability_method: str = ""
 
 
 # Contexto inmediato inclusivo/anti-discriminación dentro de la misma oración:
@@ -657,17 +681,572 @@ def render_highlighted_html(text: str, spans: List[DetectedSpan]) -> str:
     )
 
 
+# Umbrales calibrados del motor híbrido (incertidumbre ML + cobertura TF-IDF)
+_MIN_VOCAB_COVERAGE_OOD = 0.50
+_MIN_VOCAB_COVERAGE_HIGH = 0.55
+_MIN_VOCAB_COVERAGE_DT = 0.55
+_MIN_VOCAB_COVERAGE_DT_SINGLE_SPLIT = 0.60
+_MIN_RECOGNIZED_TOKENS = 4
+_MIN_CONFIDENCE_LOW = 0.45
+_MIN_CONFIDENCE_HIGH = 0.60
+_MIN_MARGIN_LOW = 0.15
+_MIN_MARGIN_HIGH = 0.25
+_MAX_ENTROPY_HIGH = 0.75
+_MAX_ENTROPY_LOW = 0.82
+
+_SPAN_SEVERITY_WEIGHTS: Dict[str, float] = {
+    "Excluyente": 28.0,
+    "LGBTQ+": 22.0,
+    "Demográfico": 20.0,
+    "Femenino": 15.0,
+    "Masculino": 15.0,
+}
+
+_CATEGORY_SEVERITY_PRIORITY: Dict[str, int] = {
+    "Excluyente": 0,
+    "LGBTQ+": 1,
+    "Demográfico": 2,
+    "Femenino": 3,
+    "Masculino": 4,
+}
+
+_TOKEN_FALLBACK_RE = re.compile(r"(?u)\b\w\w+\b")
+
+
+def _extract_pipeline_components(model: Any) -> Tuple[Any | None, Any | None]:
+    """Extrae de forma segura el vectorizador TF-IDF y el clasificador final de un Pipeline."""
+    vectorizer = None
+    classifier = None
+    named_steps = getattr(model, "named_steps", None)
+    if isinstance(named_steps, dict):
+        vectorizer = named_steps.get("tfidf")
+        classifier = named_steps.get("clf")
+        steps = list(named_steps.values())
+        if vectorizer is None:
+            for step in steps:
+                if hasattr(step, "vocabulary_") and hasattr(step, "transform"):
+                    vectorizer = step
+                    break
+        if classifier is None and steps:
+            classifier = steps[-1]
+    elif hasattr(model, "steps") and isinstance(model.steps, list) and model.steps:
+        for _, step in model.steps:
+            if vectorizer is None and hasattr(step, "vocabulary_") and hasattr(step, "transform"):
+                vectorizer = step
+        classifier = model.steps[-1][1]
+    else:
+        classifier = model
+    return vectorizer, classifier
+
+
+def _extract_sparse_row(X: Any) -> Tuple[List[int], List[float]]:
+    """Extrae índices y valores no nulos de la primera fila de una matriz dispersa o densa."""
+    if hasattr(X, "tocsr"):
+        X_csr = X.tocsr()
+        start_ptr = int(X_csr.indptr[0])
+        end_ptr = int(X_csr.indptr[1])
+        nz_indices = [int(i) for i in X_csr.indices[start_ptr:end_ptr]]
+        nz_values = [float(v) for v in X_csr.data[start_ptr:end_ptr]]
+        return nz_indices, nz_values
+    row0 = X[0]
+    nz_indices = [idx for idx, val in enumerate(row0) if float(val) != 0.0]
+    nz_values = [float(row0[idx]) for idx in nz_indices]
+    return nz_indices, nz_values
+
+
+def compute_prediction_uncertainty(probabilities: Dict[str, float]) -> Dict[str, float]:
+    """Calcula confianza máxima, margen top1-top2 y entropía normalizada [0, 1]."""
+    probs = [max(0.0, float(p)) for p in probabilities.values()]
+    if not probs:
+        return {
+            "top1_prob": 0.0,
+            "top2_prob": 0.0,
+            "margin": 0.0,
+            "normalized_entropy": 1.0,
+        }
+    total = sum(probs)
+    if total > 0.0:
+        probs = [p / total for p in probs]
+    sorted_probs = sorted(probs, reverse=True)
+    top1_prob = sorted_probs[0]
+    top2_prob = sorted_probs[1] if len(sorted_probs) > 1 else 0.0
+    margin = max(0.0, top1_prob - top2_prob)
+
+    n_classes = max(len(probs), 2)
+    entropy = -sum(p * math.log(p) for p in probs if p > 0.0)
+    normalized_entropy = max(0.0, min(1.0, entropy / math.log(n_classes)))
+
+    return {
+        "top1_prob": round(top1_prob, 4),
+        "top2_prob": round(top2_prob, 4),
+        "margin": round(margin, 4),
+        "normalized_entropy": round(normalized_entropy, 4),
+    }
+
+
+def compute_vocabulary_coverage(text: str, vectorizer: Any) -> Dict[str, Any]:
+    """Calcula la cobertura del vocabulario TF-IDF del modelo sobre los tokens del aviso."""
+    if vectorizer is None or not hasattr(vectorizer, "vocabulary_"):
+        return {
+            "has_vectorizer": False,
+            "vocabulary_coverage": 0.0,
+            "recognized_tokens": 0,
+            "total_tokens": 0,
+            "matched_features": 0,
+            "tfidf_vector": None,
+        }
+
+    vocab = vectorizer.vocabulary_ or {}
+    try:
+        preprocessor = vectorizer.build_preprocessor()
+        preprocessed = preprocessor(text)
+    except Exception:
+        preprocessed = normalize_for_ml(text)
+
+    try:
+        tokenizer = vectorizer.build_tokenizer()
+        raw_tokens = list(tokenizer(preprocessed))
+    except Exception:
+        raw_tokens = _TOKEN_FALLBACK_RE.findall(preprocessed)
+
+    try:
+        stop_words = set(vectorizer.get_stop_words() or ())
+    except Exception:
+        stop_words = set(SPANISH_MINIMAL_STOPWORDS)
+
+    content_tokens = [tok for tok in raw_tokens if tok not in stop_words]
+    total_tokens = len(content_tokens)
+    recognized_tokens = sum(1 for tok in content_tokens if tok in vocab)
+    vocabulary_coverage = (recognized_tokens / total_tokens) if total_tokens > 0 else 0.0
+
+    tfidf_vector = None
+    matched_features = 0
+    if hasattr(vectorizer, "transform"):
+        try:
+            tfidf_vector = vectorizer.transform([text])
+            nz_indices, _ = _extract_sparse_row(tfidf_vector)
+            matched_features = len(nz_indices)
+        except Exception:
+            tfidf_vector = None
+            matched_features = 0
+
+    return {
+        "has_vectorizer": True,
+        "vocabulary_coverage": round(vocabulary_coverage, 4),
+        "recognized_tokens": recognized_tokens,
+        "total_tokens": total_tokens,
+        "matched_features": matched_features,
+        "tfidf_vector": tfidf_vector,
+    }
+
+
+def _extract_linear_class_coef(
+    classifier: Any,
+    classes: List[str],
+    target_class: str,
+    nz_indices: List[int],
+) -> Dict[int, float] | None:
+    """Extrae coeficientes lineales para la clase objetivo si el estimador los expone."""
+    if target_class not in classes:
+        return None
+    target_idx = classes.index(target_class)
+
+    estimators_to_check: List[Any] = [classifier]
+    calibrated = getattr(classifier, "calibrated_classifiers_", None)
+    if calibrated:
+        for cc in calibrated:
+            inner = getattr(cc, "estimator", getattr(cc, "base_estimator", None))
+            if inner is not None:
+                estimators_to_check.append(inner)
+
+    collected_maps: List[Dict[int, float]] = []
+    for est in estimators_to_check:
+        try:
+            coef = getattr(est, "coef_", None)
+        except Exception:
+            coef = None
+        if coef is None:
+            continue
+        shape = getattr(coef, "shape", None)
+        if shape is None or len(shape) != 2 or shape[0] != len(classes):
+            continue
+        try:
+            if hasattr(coef, "tocsr"):
+                row_csr = coef.tocsr()[target_idx]
+                row_lookup = {int(i): float(v) for i, v in zip(row_csr.indices, row_csr.data)}
+                collected_maps.append({j: row_lookup.get(j, 0.0) for j in nz_indices})
+            else:
+                row = coef[target_idx]
+                collected_maps.append({j: float(row[j]) for j in nz_indices})
+        except Exception:
+            continue
+
+    if not collected_maps:
+        return None
+
+    return {
+        j: sum(m[j] for m in collected_maps) / len(collected_maps)
+        for j in nz_indices
+    }
+
+
+def _inspect_decision_tree_path(
+    classifier: Any,
+    X: Any,
+    nz_map: Dict[int, float],
+) -> Tuple[set[int], int | None]:
+    """Inspecciona si un DecisionTree alcanzó su hoja mediante rasgos presentes (> umbral)."""
+    if not (hasattr(classifier, "tree_") and hasattr(classifier, "decision_path")):
+        return set(), None
+    try:
+        node_ind = classifier.decision_path(X)
+        node_ind_csr = node_ind.tocsr() if hasattr(node_ind, "tocsr") else node_ind
+        start_ptr = int(node_ind_csr.indptr[0])
+        end_ptr = int(node_ind_csr.indptr[1])
+        node_ids = [int(nid) for nid in node_ind_csr.indices[start_ptr:end_ptr]]
+        tree = classifier.tree_
+        active_features: set[int] = set()
+        # Excluir la hoja final (node_ids[-1]), donde tree.feature == -2
+        for nid in node_ids[:-1]:
+            feat_idx = int(tree.feature[nid])
+            if feat_idx >= 0:
+                threshold = float(tree.threshold[nid])
+                if nz_map.get(feat_idx, 0.0) > threshold:
+                    active_features.add(feat_idx)
+        return active_features, len(active_features)
+    except Exception:
+        return set(), None
+
+
+def _compute_svm_local_sensitivity(
+    classifier: Any,
+    X: Any,
+    nz_indices: List[int],
+    nz_values: List[float],
+    target_class: str,
+    base_prob: float,
+    max_candidates: int = 25,
+) -> Dict[int, float]:
+    """Estima la contribución local de cada término en clasificadores sin coef_ (p. ej. SVM RBF)."""
+    if not hasattr(classifier, "predict_proba") or not hasattr(X, "tocsr") or not nz_indices:
+        return {}
+    classes = [str(c) for c in getattr(classifier, "classes_", [])]
+    if target_class not in classes:
+        return {}
+    pred_idx = classes.index(target_class)
+
+    X_csr = X.tocsr()
+    ranked_positions = sorted(
+        range(len(nz_indices)),
+        key=lambda p: nz_values[p],
+        reverse=True,
+    )[:max_candidates]
+
+    row_data: List[float] = []
+    row_indices: List[int] = []
+    indptr: List[int] = [0]
+    for drop_pos in ranked_positions:
+        sq_norm = sum(nz_values[p] ** 2 for p in range(len(nz_indices)) if p != drop_pos)
+        inv_norm = (1.0 / math.sqrt(sq_norm)) if sq_norm > 1e-12 else 1.0
+        for p in range(len(nz_indices)):
+            if p != drop_pos:
+                row_indices.append(nz_indices[p])
+                row_data.append(nz_values[p] * inv_norm)
+        indptr.append(len(row_indices))
+
+    try:
+        csr_cls = type(X_csr)
+        X_batch = csr_cls(
+            (row_data, row_indices, indptr),
+            shape=(len(ranked_positions), X_csr.shape[1]),
+            dtype=getattr(X_csr, "dtype", float),
+        )
+        pert_probs = classifier.predict_proba(X_batch)
+    except Exception:
+        return {}
+
+    contributions: Dict[int, float] = {}
+    for row_i, drop_pos in enumerate(ranked_positions):
+        delta = base_prob - float(pert_probs[row_i, pred_idx])
+        if delta > 1e-4:
+            contributions[nz_indices[drop_pos]] = delta
+    return contributions
+
+
+def extract_ml_influential_terms(
+    text: str,
+    model: Any,
+    raw_ml_category: str,
+    probabilities: Dict[str, float] | None = None,
+    tfidf_vector: Any = None,
+    top_k: int = 8,
+) -> Tuple[List[MLInfluentialTerm], str, int | None]:
+    """Identifica palabras o n-gramas presentes en el texto que más influyeron en la predicción ML."""
+    vectorizer, classifier = _extract_pipeline_components(model)
+    is_decision_tree = hasattr(classifier, "tree_") and hasattr(classifier, "decision_path")
+
+    if vectorizer is None or not hasattr(vectorizer, "transform"):
+        return [], "Sin vectorizador TF-IDF disponible", None
+
+    try:
+        X = tfidf_vector if tfidf_vector is not None else vectorizer.transform([text])
+    except Exception:
+        return [], "No fue posible transformar el texto con TF-IDF", None
+
+    nz_indices, nz_values = _extract_sparse_row(X)
+    if not nz_indices:
+        return [], "Sin términos reconocidos en el vocabulario TF-IDF", (0 if is_decision_tree else None)
+
+    if hasattr(vectorizer, "get_feature_names_out"):
+        feature_names = vectorizer.get_feature_names_out()
+
+        def get_feature_name(idx: int) -> str:
+            return str(feature_names[idx])
+    elif hasattr(vectorizer, "vocabulary_"):
+        inv_vocab = {int(v): str(k) for k, v in vectorizer.vocabulary_.items()}
+
+        def get_feature_name(idx: int) -> str:
+            return inv_vocab.get(idx, f"feat_{idx}")
+    else:
+        return [], "Vocabulario TF-IDF no disponible", (0 if is_decision_tree else None)
+
+    nz_map = dict(zip(nz_indices, nz_values))
+    classes = [str(c) for c in getattr(classifier, "classes_", getattr(model, "classes_", []))]
+
+    dt_active_features, dt_positive_splits = _inspect_decision_tree_path(classifier, X, nz_map)
+
+    scored_candidates: List[Tuple[int, float, float, str]] = []
+    method_label = ""
+
+    # 1. Coeficientes lineales (p. ej. LinearSVC / SVM lineal / modelos lineales calibrados)
+    linear_coefs = _extract_linear_class_coef(classifier, classes, raw_ml_category, nz_indices)
+    if linear_coefs is not None:
+        positive_linear = [
+            (j, nz_map[j], nz_map[j] * linear_coefs[j], "coeficiente_lineal")
+            for j in nz_indices
+            if linear_coefs[j] > 0.0
+        ]
+        if positive_linear:
+            positive_linear.sort(key=lambda item: item[2], reverse=True)
+            scored_candidates = positive_linear[:top_k]
+            method_label = "Coeficientes lineales × peso TF-IDF"
+
+    # 2. Importancias basadas en árboles (Decision Tree / Random Forest)
+    if not scored_candidates and hasattr(classifier, "feature_importances_"):
+        try:
+            importances = classifier.feature_importances_
+            max_idx = max(nz_indices)
+            if len(importances) > max_idx:
+                if is_decision_tree:
+                    path_items: List[Tuple[int, float, float, str]] = []
+                    other_items: List[Tuple[int, float, float, str]] = []
+                    for j in nz_indices:
+                        w_j = nz_map[j]
+                        imp_j = float(importances[j])
+                        if j in dt_active_features:
+                            path_items.append((j, w_j, w_j * max(imp_j, 1e-4), "ruta_arbol"))
+                        elif imp_j > 0.0:
+                            other_items.append((j, w_j, w_j * imp_j, "importancia_arbol"))
+                    path_items.sort(key=lambda item: item[2], reverse=True)
+                    other_items.sort(key=lambda item: item[2], reverse=True)
+                    if path_items and other_items:
+                        max_other = other_items[0][2]
+                        path_items = [
+                            (j, w_j, raw_s + max_other + 1e-6, src)
+                            for j, w_j, raw_s, src in path_items
+                        ]
+                    combined = path_items + other_items
+                    if combined:
+                        scored_candidates = combined[:top_k]
+                        method_label = (
+                            "Ruta de decisión e importancia del Árbol × TF-IDF"
+                            if path_items
+                            else "Importancia del Árbol × peso TF-IDF"
+                        )
+                else:
+                    rf_items = [
+                        (j, nz_map[j], nz_map[j] * float(importances[j]), "importancia_bosque")
+                        for j in nz_indices
+                        if float(importances[j]) > 0.0
+                    ]
+                    if rf_items:
+                        rf_items.sort(key=lambda item: item[2], reverse=True)
+                        scored_candidates = rf_items[:top_k]
+                        method_label = "Importancia de variables (Random Forest) × peso TF-IDF"
+        except Exception:
+            scored_candidates = []
+
+    # 3. Sensibilidad local para clasificadores no lineales sin coef_ (SVM RBF calibrado)
+    if not scored_candidates and probabilities is not None:
+        base_prob = float(probabilities.get(raw_ml_category, 0.0))
+        svm_contribs = _compute_svm_local_sensitivity(
+            classifier=classifier,
+            X=X,
+            nz_indices=nz_indices,
+            nz_values=nz_values,
+            target_class=raw_ml_category,
+            base_prob=base_prob,
+        )
+        if svm_contribs:
+            svm_items = [
+                (j, nz_map[j], delta, "sensibilidad_svm")
+                for j, delta in svm_contribs.items()
+            ]
+            svm_items.sort(key=lambda item: item[2], reverse=True)
+            scored_candidates = svm_items[:top_k]
+            method_label = "Sensibilidad local del clasificador SVM (leave-one-out)"
+
+    # 4. Respaldo seguro: pesos TF-IDF no nulos más altos presentes en el documento
+    if not scored_candidates:
+        tfidf_items = [
+            (j, nz_map[j], nz_map[j], "peso_tfidf")
+            for j in nz_indices
+        ]
+        tfidf_items.sort(key=lambda item: item[2], reverse=True)
+        scored_candidates = tfidf_items[:top_k]
+        method_label = "Pesos TF-IDF más altos reconocidos en el texto"
+
+    max_raw_score = max((item[2] for item in scored_candidates), default=1.0)
+    if max_raw_score <= 0.0:
+        max_raw_score = 1.0
+
+    terms = [
+        MLInfluentialTerm(
+            term=get_feature_name(j),
+            tfidf_weight=round(w_j, 4),
+            influence_score=round(raw_score / max_raw_score, 4),
+            source=src,
+        )
+        for j, w_j, raw_score, src in scored_candidates
+    ]
+    return terms, method_label, dt_positive_splits
+
+
+def _assess_ml_reliability(
+    top1_prob: float,
+    margin: float,
+    normalized_entropy: float,
+    vocabulary_coverage: float,
+    recognized_tokens: int,
+    has_vectorizer: bool,
+    is_decision_tree: bool,
+    dt_positive_splits: int | None,
+) -> Tuple[str, str, List[str]]:
+    """Evalúa la confiabilidad estadística del ML ('alta', 'media' o 'baja') y sus motivos."""
+    low_reasons: List[str] = []
+    is_default_leaf_collapse = is_decision_tree and (dt_positive_splits is not None and dt_positive_splits == 0)
+
+    if has_vectorizer:
+        if vocabulary_coverage < _MIN_VOCAB_COVERAGE_OOD:
+            low_reasons.append(f"cobertura de vocabulario TF-IDF baja ({vocabulary_coverage * 100:.1f}%)")
+        elif is_decision_tree and vocabulary_coverage < _MIN_VOCAB_COVERAGE_DT:
+            low_reasons.append(
+                f"cobertura TF-IDF insuficiente para Decision Tree ({vocabulary_coverage * 100:.1f}%)"
+            )
+        if recognized_tokens < _MIN_RECOGNIZED_TOKENS:
+            low_reasons.append(f"muy pocos tokens reconocidos ({recognized_tokens})")
+
+    if is_default_leaf_collapse:
+        low_reasons.append("Decision Tree cayó en hoja por defecto sin rasgos presentes activos")
+    if top1_prob < _MIN_CONFIDENCE_LOW:
+        low_reasons.append(f"confianza máxima baja ({top1_prob * 100:.1f}%)")
+    if margin < _MIN_MARGIN_LOW:
+        low_reasons.append(f"margen estrecho entre clases ({margin * 100:.1f}%)")
+    if normalized_entropy > _MAX_ENTROPY_LOW:
+        low_reasons.append(f"distribución probabilística dispersa (entropía {normalized_entropy:.2f})")
+
+    if low_reasons:
+        return "baja", "Baja (Fuera de dominio / Incierto)", low_reasons
+
+    dt_split_ok = (
+        not is_decision_tree
+        or dt_positive_splits is None
+        or dt_positive_splits >= 2
+        or (dt_positive_splits >= 1 and (not has_vectorizer or vocabulary_coverage >= _MIN_VOCAB_COVERAGE_DT_SINGLE_SPLIT))
+    )
+    cov_high_ok = (not has_vectorizer) or (vocabulary_coverage >= _MIN_VOCAB_COVERAGE_HIGH)
+
+    if (
+        cov_high_ok
+        and top1_prob >= _MIN_CONFIDENCE_HIGH
+        and margin >= _MIN_MARGIN_HIGH
+        and normalized_entropy <= _MAX_ENTROPY_HIGH
+        and dt_split_ok
+    ):
+        return "alta", "Alta", []
+
+    media_reasons: List[str] = []
+    if has_vectorizer and vocabulary_coverage < _MIN_VOCAB_COVERAGE_HIGH:
+        media_reasons.append(f"cobertura de vocabulario moderada ({vocabulary_coverage * 100:.1f}%)")
+    if top1_prob < _MIN_CONFIDENCE_HIGH:
+        media_reasons.append(f"confianza moderada ({top1_prob * 100:.1f}%)")
+    if margin < _MIN_MARGIN_HIGH:
+        media_reasons.append(f"margen moderado ({margin * 100:.1f}%)")
+    if normalized_entropy > _MAX_ENTROPY_HIGH:
+        media_reasons.append(f"entropía moderada ({normalized_entropy:.2f})")
+    if not dt_split_ok:
+        media_reasons.append("respaldo limitado de nodos activos en Decision Tree")
+
+    return "media", "Media", media_reasons
+
+
+def _select_dominant_lexical_category(spans: List[DetectedSpan]) -> str:
+    """Selecciona la categoría léxica dominante ponderando severidad y frecuencia de frases."""
+    weighted_totals: Counter[str] = Counter()
+    for span in spans:
+        weighted_totals[span.category] += _SPAN_SEVERITY_WEIGHTS.get(span.category, 15.0)
+    return max(
+        weighted_totals.keys(),
+        key=lambda cat: (weighted_totals[cat], -_CATEGORY_SEVERITY_PRIORITY.get(cat, 5)),
+    )
+
+
 def analyze_job_posting(text: str, model_key: str | None = None, pipeline=None) -> AnalysisResult:
-    """Ejecuta predicción ML + detección de frases + resaltado HTML sobre una oferta laboral."""
+    """Ejecuta inferencia híbrida calibrada (ML + incertidumbre/OOV + motor léxico + explicabilidad)."""
     chosen_key = model_key or load_best_model_key()
     model = pipeline if pipeline is not None else load_model(chosen_key)
+    model_name = MODEL_DISPLAY_NAMES.get(chosen_key, chosen_key)
 
     proba_arr = model.predict_proba([text])[0]
     classes = list(model.classes_)
     raw_probs = {cls: float(prob) for cls, prob in zip(classes, proba_arr)}
     probabilities = {cat: raw_probs.get(cat, 0.0) for cat in ALL_CATEGORIES}
     bias_probabilities = {cat: probabilities[cat] for cat in BIAS_CATEGORIES}
-    predicted_class = max(probabilities, key=probabilities.get)
+    raw_ml_category = max(probabilities, key=probabilities.get)
+
+    vectorizer, classifier = _extract_pipeline_components(model)
+    is_decision_tree = hasattr(classifier, "tree_") and hasattr(classifier, "decision_path")
+
+    uncertainty = compute_prediction_uncertainty(probabilities)
+    top1_prob = uncertainty["top1_prob"]
+    margin = uncertainty["margin"]
+    normalized_entropy = uncertainty["normalized_entropy"]
+
+    coverage_info = compute_vocabulary_coverage(text, vectorizer)
+    has_vectorizer = bool(coverage_info["has_vectorizer"])
+    vocabulary_coverage = float(coverage_info["vocabulary_coverage"])
+    recognized_tokens = int(coverage_info["recognized_tokens"])
+    total_tokens = int(coverage_info["total_tokens"])
+    matched_features = int(coverage_info["matched_features"])
+
+    influential_terms, explainability_method, dt_positive_splits = extract_ml_influential_terms(
+        text=text,
+        model=model,
+        raw_ml_category=raw_ml_category,
+        probabilities=probabilities,
+        tfidf_vector=coverage_info["tfidf_vector"],
+    )
+
+    ml_reliability, ml_reliability_label, reliability_reasons = _assess_ml_reliability(
+        top1_prob=top1_prob,
+        margin=margin,
+        normalized_entropy=normalized_entropy,
+        vocabulary_coverage=vocabulary_coverage,
+        recognized_tokens=recognized_tokens,
+        has_vectorizer=has_vectorizer,
+        is_decision_tree=is_decision_tree,
+        dt_positive_splits=dt_positive_splits,
+    )
 
     spans = detect_biased_spans(text)
     detected_categories = sorted(
@@ -677,24 +1256,146 @@ def analyze_job_posting(text: str, model_key: str | None = None, pipeline=None) 
     highlighted_html = render_highlighted_html(text, spans)
     technical_terms = extract_technical_terms(text)
 
-    # Índice de inclusividad transparente combinando probabilidad Neutro del modelo y frases detectadas
-    ml_neutro_pct = probabilities["Neutro"] * 100.0
-    span_penalty = min(len(spans) * 14.0, 85.0)
-    if spans:
-        inclusivity_score = max(0.0, round(min(ml_neutro_pct, 100.0 - span_penalty), 1))
-    else:
-        inclusivity_score = round(ml_neutro_pct, 1)
+    ml_neutro = probabilities["Neutro"]
+    ml_neutro_pct = ml_neutro * 100.0
+    is_default_leaf_collapse = is_decision_tree and (dt_positive_splits is not None and dt_positive_splits == 0)
 
-    if inclusivity_score >= 70.0 and not spans:
+    # ==================== FUSIÓN HÍBRIDA EN 3 ESCENARIOS (+ NEUTRO CONFIRMADO) ====================
+    if spans:
+        # Escenario 1: Evidencia léxica explícita detectada
+        decision_mode = "lexical_explicit"
+        dominant_lex_cat = _select_dominant_lexical_category(spans)
+        if raw_ml_category in detected_categories and ml_reliability != "baja":
+            predicted_class = raw_ml_category
+        elif raw_ml_category != "Neutro" and ml_reliability == "alta":
+            predicted_class = raw_ml_category
+        else:
+            predicted_class = dominant_lex_cat
+
+        span_penalty = min(
+            15.0 + sum(_SPAN_SEVERITY_WEIGHTS.get(s.category, 15.0) for s in spans),
+            90.0,
+        )
+        lexical_score = max(0.0, 100.0 - span_penalty)
+        ml_weight = 0.45 if ml_reliability == "alta" else (0.30 if ml_reliability == "media" else 0.10)
+        inclusivity_score = round(
+            max(0.0, min(lexical_score, (1.0 - ml_weight) * lexical_score + ml_weight * ml_neutro_pct)),
+            1,
+        )
+
+        if (
+            inclusivity_score < 45.0
+            or len(spans) >= 3
+            or ("Excluyente" in detected_categories and (len(spans) >= 2 or inclusivity_score < 55.0))
+        ):
+            risk_level = "Alto"
+        else:
+            risk_level = "Moderado"
+
+        cats_str = ", ".join(detected_categories)
+        if predicted_class == raw_ml_category:
+            decision_explanation = (
+                f"Se detectaron {len(spans)} frase(s) sesgada(s) explícita(s) ({cats_str}), "
+                f"corroboradas por el clasificador {model_name} "
+                f"(confianza ML: {top1_prob * 100:.1f}%, cobertura TF-IDF: {vocabulary_coverage * 100:.1f}%)."
+            )
+        else:
+            decision_explanation = (
+                f"Se detectaron {len(spans)} frase(s) sesgada(s) explícita(s) ({cats_str}). "
+                f"El motor híbrido priorizó la evidencia léxica sobre la predicción cruda de {model_name} "
+                f"('{raw_ml_category}', {top1_prob * 100:.1f}%, confiabilidad {ml_reliability_label.lower()})."
+            )
+
+    elif raw_ml_category != "Neutro" and ml_reliability == "alta":
+        # Escenario 2: 0 frases léxicas explícitas, pero ML con confianza real alta y buena cobertura
+        decision_mode = "ml_implicit_bias"
+        predicted_class = raw_ml_category
+        strength = min(1.0, max(0.0, (top1_prob - _MIN_CONFIDENCE_HIGH) / (1.0 - _MIN_CONFIDENCE_HIGH)))
+        inclusivity_score = round(
+            max(50.0, min(70.0, 70.0 - 20.0 * strength + 5.0 * ml_neutro)),
+            1,
+        )
+        risk_level = "Medio"
+        decision_explanation = (
+            f"No se detectaron frases sesgadas explícitas en el texto, pero {model_name} identificó un "
+            f"patrón estadístico consistente con posible sesgo implícito '{raw_ml_category}' "
+            f"(confianza: {top1_prob * 100:.1f}%, margen: {margin * 100:.1f}%, entropía: {normalized_entropy:.2f}, "
+            f"cobertura TF-IDF: {vocabulary_coverage * 100:.1f}%). Se mantiene alerta preventiva de nivel Medio; "
+            f"revisa los términos influyentes del modelo."
+        )
+
+    elif raw_ml_category == "Neutro" and ml_reliability in ("alta", "media"):
+        # Caso Neutro confirmado en dominio: 0 frases léxicas y ML consistente con Neutro
+        decision_mode = "neutral_confirmed"
+        predicted_class = "Neutro"
+        base_floor = 86.0 if ml_reliability == "alta" else 83.0
+        inclusivity_score = round(
+            min(100.0, max(ml_neutro_pct, base_floor + (100.0 - base_floor) * ml_neutro)),
+            1,
+        )
         risk_level = "Bajo (Inclusivo)"
-    elif inclusivity_score >= 40.0 and len(spans) <= 2:
-        risk_level = "Moderado"
+        decision_explanation = (
+            f"No se detectaron frases sesgadas explícitas y {model_name} confirmó redacción neutra e inclusiva "
+            f"(probabilidad Neutro: {ml_neutro_pct:.1f}%, cobertura TF-IDF: {vocabulary_coverage * 100:.1f}%)."
+        )
+
     else:
-        risk_level = "Alto"
+        # Escenario 3: 0 frases léxicas explícitas y ML incierto / disperso / fuera de dominio
+        decision_mode = "calibrated_neutral"
+        predicted_class = "Neutro"
+        risk_level = "Bajo (Inclusivo)"
+
+        cov_factor = min(1.0, (vocabulary_coverage / 0.75)) if has_vectorizer else 0.65
+        dt_ood_collapse = is_default_leaf_collapse or (
+            is_decision_tree and has_vectorizer and vocabulary_coverage < _MIN_VOCAB_COVERAGE_DT
+        )
+        effective_entropy = 0.85 if dt_ood_collapse else normalized_entropy
+
+        if is_default_leaf_collapse:
+            certainty_factor = 0.05
+        else:
+            certainty_factor = max(0.0, 1.0 - normalized_entropy) * min(1.0, margin / 0.40)
+            if dt_ood_collapse:
+                certainty_factor *= 0.20 * cov_factor
+
+        effective_ml_trust = max(0.0, min(1.0, cov_factor * certainty_factor))
+
+        if raw_ml_category == "Neutro":
+            inclusivity_score = round(
+                max(82.0, min(94.0, 88.0 + 6.0 * ml_neutro - 4.0 * (1.0 - cov_factor))),
+                1,
+            )
+            reasons_txt = "; ".join(reliability_reasons) if reliability_reasons else "baja certeza estadística"
+            decision_explanation = (
+                f"No se detectaron frases sesgadas explícitas y la predicción cruda de {model_name} "
+                f"también se inclinó hacia Neutro ({top1_prob * 100:.1f}%), pero con baja confiabilidad "
+                f"estadística ({reasons_txt}). El motor híbrido calibró el Índice de Inclusividad "
+                f"combinando la ausencia de sesgos léxicos con la confianza efectiva del modelo."
+            )
+        else:
+            caution_deduction = 5.0 * (1.0 - cov_factor) + 3.5 * effective_entropy
+            residual_bias_penalty = 18.0 * (1.0 - ml_neutro) * effective_ml_trust
+            media_adj = (
+                4.0 * max(0.0, (top1_prob - _MIN_CONFIDENCE_LOW) / (_MIN_CONFIDENCE_HIGH - _MIN_CONFIDENCE_LOW))
+                if ml_reliability == "media"
+                else 0.0
+            )
+            inclusivity_score = round(
+                max(80.0, min(92.0, 94.0 - caution_deduction - residual_bias_penalty - media_adj)),
+                1,
+            )
+            reasons_txt = "; ".join(reliability_reasons) if reliability_reasons else "baja certeza estadística"
+            decision_explanation = (
+                f"No se detectaron frases sesgadas explícitas en el texto. Aunque la señal cruda de "
+                f"{model_name} se inclinó hacia '{raw_ml_category}' ({top1_prob * 100:.1f}%), el clasificador "
+                f"presentó confiabilidad {ml_reliability_label.lower()} ({reasons_txt}). "
+                f"Por ello, el motor híbrido calibró el diagnóstico final a Neutro (riesgo Bajo) "
+                f"manteniendo visibles las probabilidades crudas del ML por transparencia."
+            )
 
     return AnalysisResult(
         model_key=chosen_key,
-        model_name=MODEL_DISPLAY_NAMES.get(chosen_key, chosen_key),
+        model_name=model_name,
         predicted_class=predicted_class,
         probabilities=probabilities,
         bias_probabilities=bias_probabilities,
@@ -704,4 +1405,18 @@ def analyze_job_posting(text: str, model_key: str | None = None, pipeline=None) 
         highlighted_html=highlighted_html,
         detected_categories=detected_categories,
         technical_terms=technical_terms,
+        raw_ml_category=raw_ml_category,
+        ml_confidence=top1_prob,
+        ml_margin=margin,
+        ml_entropy=normalized_entropy,
+        vocabulary_coverage=vocabulary_coverage,
+        recognized_tokens=recognized_tokens,
+        total_tokens=total_tokens,
+        matched_features=matched_features,
+        ml_reliability=ml_reliability,
+        ml_reliability_label=ml_reliability_label,
+        decision_mode=decision_mode,
+        decision_explanation=decision_explanation,
+        influential_terms=influential_terms,
+        explainability_method=explainability_method,
     )
