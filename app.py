@@ -45,24 +45,156 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        .main-header {
+        /* Forzar tema claro global en toda la app independientemente del navegador/SO */
+        :root, html, body {
+            color-scheme: light !important;
+            background-color: #FFFFFF !important;
+            color: #0F172A !important;
+        }
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"] {
+            background-color: #FFFFFF !important;
+            color: #0F172A !important;
+        }
+        [data-testid="stHeader"],
+        [data-testid="stToolbar"],
+        [data-testid="stDecoration"] {
+            background-color: #FFFFFF !important;
+            color: #0F172A !important;
+        }
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] > div,
+        [data-testid="stSidebarContent"] {
+            background-color: #F8FAFC !important;
+            color: #0F172A !important;
+        }
+        .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+            color: #0F172A;
+        }
+        .stApp [data-testid="stMarkdownContainer"] p,
+        .stApp [data-testid="stMarkdownContainer"] li,
+        .stApp [data-testid="stWidgetLabel"],
+        .stApp [data-testid="stWidgetLabel"] p,
+        .stApp label {
+            color: #0F172A !important;
+        }
+        .stApp [data-testid="stCaptionContainer"],
+        .stApp [data-testid="stCaptionContainer"] p {
+            color: #475569 !important;
+        }
+        /* Inputs, textarea, selectbox, expanders, tabs y botones en modo claro */
+        .stApp textarea,
+        .stApp input,
+        .stApp [data-baseweb="textarea"],
+        .stApp [data-baseweb="textarea"] > div,
+        .stApp [data-baseweb="input"],
+        .stApp [data-baseweb="base-input"] {
+            background-color: #FFFFFF !important;
+            color: #0F172A !important;
+            border-color: #CBD5E1 !important;
+            caret-color: #0F172A !important;
+        }
+        .stApp textarea::placeholder,
+        .stApp input::placeholder {
+            color: #64748B !important;
+        }
+        .stApp [data-baseweb="select"] > div {
+            background-color: #FFFFFF !important;
+            color: #0F172A !important;
+            border-color: #CBD5E1 !important;
+        }
+        .stApp [data-baseweb="select"] span,
+        .stApp [data-baseweb="select"] div,
+        .stApp [data-baseweb="select"] svg {
+            color: #0F172A !important;
+            fill: #0F172A !important;
+        }
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        ul[role="listbox"],
+        li[role="option"] {
+            background-color: #FFFFFF !important;
+            color: #0F172A !important;
+        }
+        li[role="option"]:hover {
+            background-color: #F1F5F9 !important;
+            color: #0F172A !important;
+        }
+        .stApp [data-testid="stExpander"],
+        .stApp [data-testid="stExpander"] details {
+            background-color: #FFFFFF !important;
+            border: 1px solid #E2E8F0 !important;
+            border-radius: 10px !important;
+            color: #0F172A !important;
+        }
+        .stApp [data-testid="stExpander"] summary,
+        .stApp [data-testid="stExpander"] summary p,
+        .stApp [data-testid="stExpander"] summary svg {
+            background-color: #F8FAFC !important;
+            color: #0F172A !important;
+            fill: #0F172A !important;
+        }
+        .stApp [data-testid="stTabs"] button[role="tab"] {
+            color: #475569 !important;
+            background-color: transparent !important;
+        }
+        .stApp [data-testid="stTabs"] button[role="tab"] p {
+            color: inherit !important;
+        }
+        .stApp [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+            color: #2563EB !important;
+            font-weight: 700 !important;
+        }
+        .stApp button[kind="secondary"],
+        .stApp [data-testid="stDownloadButton"] button {
+            background-color: #FFFFFF !important;
+            color: #0F172A !important;
+            border: 1px solid #CBD5E1 !important;
+        }
+        .stApp button[kind="secondary"] p,
+        .stApp [data-testid="stDownloadButton"] button p {
+            color: #0F172A !important;
+        }
+        .stApp button[kind="secondary"]:hover,
+        .stApp [data-testid="stDownloadButton"] button:hover {
+            background-color: #F8FAFC !important;
+            border-color: #2563EB !important;
+            color: #1E3A8A !important;
+        }
+        .stApp button[kind="primary"] {
+            background-color: #2563EB !important;
+            color: #FFFFFF !important;
+            border: 1px solid #2563EB !important;
+        }
+        .stApp button[kind="primary"] p {
+            color: #FFFFFF !important;
+        }
+        .stApp [data-testid="stAlert"] p {
+            color: #0F172A !important;
+        }
+        .main-header,
+        .stApp [data-testid="stMarkdownContainer"] .main-header {
             background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 60%, #4338CA 100%);
             padding: 1.6rem 2rem;
             border-radius: 14px;
-            color: #FFFFFF;
+            color: #FFFFFF !important;
             margin-bottom: 1.2rem;
             box-shadow: 0 4px 14px rgba(15, 23, 42, 0.14);
         }
-        .main-header h1 {
+        .main-header h1,
+        .stApp [data-testid="stMarkdownContainer"] .main-header h1 {
             margin: 0;
             font-size: 1.85rem;
             font-weight: 700;
-            color: #FFFFFF;
+            color: #FFFFFF !important;
         }
-        .main-header p {
+        .main-header p,
+        .stApp [data-testid="stMarkdownContainer"] .main-header p {
             margin: 0.45rem 0 0 0;
             font-size: 0.98rem;
-            color: #E2E8F0;
+            color: #E2E8F0 !important;
         }
         .legend-wrap {
             display: flex;
@@ -107,29 +239,31 @@ st.markdown(
             font-weight: 700;
             font-size: 0.92rem;
         }
-        /* Ajuste tipográfico de tarjetas KPI y st.metric para evitar recortes */
+        /* Ajuste tipográfico de tarjetas KPI y st.metric con contraste oscuro forzado */
         [data-testid="stMetric"] {
-            background-color: #FFFFFF;
-            border: 1px solid #E2E8F0;
+            background-color: #FFFFFF !important;
+            border: 1px solid #E2E8F0 !important;
             border-radius: 10px;
             padding: 12px 14px;
             min-height: 92px;
+            color: #0F172A !important;
         }
-        [data-testid="stMetricLabel"] {
+        [data-testid="stMetricLabel"],
+        [data-testid="stMetricLabel"] p,
+        [data-testid="stMetricLabel"] div {
             font-size: 0.78rem !important;
+            line-height: 1.25 !important;
             color: #475569 !important;
             white-space: normal !important;
             overflow: visible !important;
         }
-        [data-testid="stMetricLabel"] p {
-            font-size: 0.78rem !important;
-            line-height: 1.25 !important;
-        }
         [data-testid="stMetricValue"],
-        [data-testid="stMetricValue"] > div {
+        [data-testid="stMetricValue"] > div,
+        [data-testid="stMetricValue"] * {
             font-size: 1.32rem !important;
             line-height: 1.25 !important;
             font-weight: 700 !important;
+            color: #0F172A !important;
             white-space: normal !important;
             overflow: visible !important;
             text-overflow: clip !important;
@@ -141,12 +275,15 @@ st.markdown(
             white-space: normal !important;
         }
         section[data-testid="stSidebar"] [data-testid="stMetric"] {
+            background-color: #FFFFFF !important;
             padding: 8px 10px;
             min-height: auto;
         }
         section[data-testid="stSidebar"] [data-testid="stMetricValue"],
-        section[data-testid="stSidebar"] [data-testid="stMetricValue"] > div {
+        section[data-testid="stSidebar"] [data-testid="stMetricValue"] > div,
+        section[data-testid="stSidebar"] [data-testid="stMetricValue"] * {
             font-size: 1.12rem !important;
+            color: #0F172A !important;
         }
         .kpi-card {
             padding: 12px 14px;
@@ -155,10 +292,11 @@ st.markdown(
             display: flex;
             flex-direction: column;
             justify-content: center;
+            color: #0F172A;
         }
         .kpi-card-label {
             font-size: 0.74rem;
-            color: #475569;
+            color: #475569 !important;
             font-weight: 600;
             letter-spacing: 0.02em;
         }
@@ -167,12 +305,13 @@ st.markdown(
             font-weight: 800;
             margin-top: 3px;
             line-height: 1.2;
+            color: #0F172A;
             white-space: normal;
             word-break: break-word;
         }
         .kpi-card-sub {
             font-size: 0.76rem;
-            color: #334155;
+            color: #334155 !important;
             margin-top: 2px;
         }
         .kpi-card-multi {
@@ -456,6 +595,42 @@ def render_category_legend() -> None:
     st.markdown(f'<div class="legend-wrap">{"".join(pills)}</div>', unsafe_allow_html=True)
 
 
+def apply_light_plotly_theme(fig: go.Figure) -> go.Figure:
+    """Fuerza fondo blanco y tipografía oscura en cualquier gráfico Plotly."""
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        font=dict(color="#0F172A"),
+        title_font=dict(color="#0F172A"),
+        legend=dict(
+            font=dict(color="#0F172A"),
+            title_font=dict(color="#0F172A"),
+            bgcolor="#FFFFFF",
+        ),
+        hoverlabel=dict(
+            bgcolor="#FFFFFF",
+            bordercolor="#CBD5E1",
+            font=dict(color="#0F172A"),
+        ),
+    )
+    fig.update_xaxes(
+        title_font=dict(color="#334155"),
+        tickfont=dict(color="#334155"),
+        gridcolor="#E2E8F0",
+        linecolor="#CBD5E1",
+        zerolinecolor="#CBD5E1",
+    )
+    fig.update_yaxes(
+        title_font=dict(color="#334155"),
+        tickfont=dict(color="#334155"),
+        gridcolor="#E2E8F0",
+        linecolor="#CBD5E1",
+        zerolinecolor="#CBD5E1",
+    )
+    return fig
+
+
 def make_bias_probability_chart(bias_probs: Dict[str, float]) -> go.Figure:
     cats = list(BIAS_CATEGORIES)
     vals = [round(bias_probs.get(c, 0.0) * 100.0, 2) for c in cats]
@@ -469,20 +644,19 @@ def make_bias_probability_chart(bias_probs: Dict[str, float]) -> go.Figure:
             marker=dict(color=colors, line=dict(width=0)),
             text=[f"{v:.1f}%" for v in vals],
             textposition="outside",
+            textfont=dict(color="#0F172A", size=12),
             hovertemplate="<b>%{y}</b>: %{x:.2f}%<extra></extra>",
         )
     )
     fig.update_layout(
-        title="Probabilidad por categoría de sesgo (Modelo ML)",
-        xaxis=dict(title="Probabilidad (%)", range=[0, max(105, max(vals) + 15)], showgrid=True, gridcolor="#E2E8F0"),
+        title=dict(text="Probabilidad por categoría de sesgo (Modelo ML)", font=dict(color="#0F172A", size=15)),
+        xaxis=dict(title="Probabilidad (%)", range=[0, max(105, max(vals) + 15)], showgrid=True),
         yaxis=dict(autorange="reversed", title=""),
         height=310,
-        margin=dict(l=10, r=40, t=45, b=35),
-        plot_bgcolor="#FFFFFF",
-        paper_bgcolor="#FFFFFF",
-        font=dict(size=13, color="#1E293B"),
+        margin=dict(l=10, r=45, t=45, b=35),
+        font=dict(size=13, color="#0F172A"),
     )
-    return fig
+    return apply_light_plotly_theme(fig)
 
 
 def make_confusion_matrix_figure(cm_matrix: list, labels: list, title: str) -> go.Figure:
@@ -495,19 +669,20 @@ def make_confusion_matrix_figure(cm_matrix: list, labels: list, title: str) -> g
             text=cm_matrix,
             texttemplate="%{text}",
             textfont={"size": 13},
+            colorbar=dict(tickfont=dict(color="#334155"), title=dict(font=dict(color="#334155"))),
             hovertemplate="Real: <b>%{y}</b><br>Predicho: <b>%{x}</b><br>Casos: %{z}<extra></extra>",
             showscale=True,
         )
     )
     fig.update_layout(
-        title=title,
+        title=dict(text=title, font=dict(color="#0F172A", size=15)),
         xaxis_title="Clase Predicha",
         yaxis_title="Clase Real",
         yaxis=dict(autorange="reversed"),
         height=420,
         margin=dict(l=20, r=20, t=50, b=30),
     )
-    return fig
+    return apply_light_plotly_theme(fig)
 
 
 def read_file_bytes(path: Path) -> bytes:
@@ -1012,7 +1187,7 @@ with tab_analyzer:
         with col_right:
             st.markdown("#### 📈 Probabilidades por categoría de sesgo")
             fig_probs = make_bias_probability_chart(analysis.bias_probabilities)
-            st.plotly_chart(fig_probs, width="stretch")
+            st.plotly_chart(fig_probs, theme=None, width="stretch")
 
             neutro_pct = analysis.probabilities["Neutro"] * 100.0
             neutro_meta = CATEGORY_INFO["Neutro"]
@@ -1213,8 +1388,10 @@ with tab_metrics:
             title="Comparación de desempeño en conjunto de prueba (Test 20%)",
             color_discrete_sequence=["#2563EB", "#7C3AED", "#059669"],
         )
+        fig_comp.update_traces(textfont=dict(color="#0F172A"))
         fig_comp.update_layout(yaxis=dict(range=[0, 1.08]), legend_title="Modelo", height=380)
-        st.plotly_chart(fig_comp, width="stretch")
+        apply_light_plotly_theme(fig_comp)
+        st.plotly_chart(fig_comp, theme=None, width="stretch")
 
         # Matrices de confusión y métricas por clase
         st.markdown("#### 🧩 Matriz de confusión y reporte por clase")
@@ -1232,7 +1409,7 @@ with tab_metrics:
                 sel_model_data["confusion_matrix"]["labels"],
                 f"Matriz de Confusión — {sel_model_data['display_name']}",
             )
-            st.plotly_chart(fig_cm, width="stretch")
+            st.plotly_chart(fig_cm, theme=None, width="stretch")
         with cm_col2:
             st.markdown(f"**Métricas por clase — {sel_model_data['display_name']}**")
             per_cls_df = pd.DataFrame.from_dict(sel_model_data["per_class"], orient="index").reset_index()
@@ -1294,8 +1471,10 @@ with tab_dataset:
                 color_discrete_map={cat: CATEGORY_INFO[cat]["color"] for cat in ALL_CATEGORIES},
                 title="Distribución balanceada por categoría",
             )
+            fig_dist.update_traces(textposition="outside", textfont=dict(color="#0F172A"))
             fig_dist.update_layout(showlegend=False, height=340, yaxis=dict(range=[0, counts["Cantidad"].max() + 25]))
-            st.plotly_chart(fig_dist, width="stretch")
+            apply_light_plotly_theme(fig_dist)
+            st.plotly_chart(fig_dist, theme=None, width="stretch")
 
         with ds_c2:
             st.markdown("#### Resumen estructural del corpus")
