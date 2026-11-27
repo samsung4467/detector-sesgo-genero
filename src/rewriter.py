@@ -136,8 +136,63 @@ REWRITE_RULES: List[Tuple[str, str, str, str]] = [
     (
         r"\bsexo\s+(?:masculino|femenino)\s+excluyente\b|\bvaron\s+excluyente\b",
         "convocatoria abierta sin distinción de género",
-        "Excluyente",
+        "Masculino",
         "Eliminación de requisito de sexo.",
+    ),
+    # Patrones peruanos frecuentes (personal masculino, / Varones, - Varón, (Varón), caballeros, anfitriona/azafata)
+    (
+        r"(?:[-–—/|:]\s*)\b(?:personal\s+masculino|varon(?:es)?|caballeros?|hombres?)\b(?!\s*(?:y|o|\/)\s*(?:mujer(?:es)?|damas?))",
+        "",
+        "Masculino",
+        "Eliminación de restricción de género en encabezado o título de la vacante.",
+    ),
+    (
+        r"\(\s*(?:solo\s+)?(?:varon(?:es)?|hombres?|caballeros?|masculino|mujer(?:es)?|damas?|femenino)\s*\)",
+        "",
+        "Masculino",
+        "Eliminación de restricción de sexo entre paréntesis.",
+    ),
+    (
+        r"\bpersonal(?:\s+de\s+\w+){0,2}\s+masculino\b",
+        "personal calificado",
+        "Masculino",
+        "Sustitución de 'personal masculino' por redacción neutra e inclusiva.",
+    ),
+    (
+        r"\bpersonal(?:\s+de\s+\w+){0,2}\s+femenino\b",
+        "personal calificado",
+        "Excluyente",
+        "Sustitución de 'personal femenino' por redacción neutra e inclusiva.",
+    ),
+    (
+        r"\b(operari[oa]s?|auxiliar(?:es)?|ayudantes?|reponedor(?:es)?|chofer(?:es)?|conductores?|estibadores?)(?:\s+de\s+\w+){0,2}\s+(?:varones|varon|caballeros|hombres)\b",
+        r"\1",
+        "Masculino",
+        "Eliminación de restricción a varones en el cargo operativo.",
+    ),
+    (
+        r"(?<!y\s)(?<!o\s)(?<!ni\s)(?<!hombres,\s)(?<!mujeres,\s)\bvaron(?:es)?\b(?!\s*(?:y|o|,|\/)\s*(?:mujer|dama|femenin|persona))",
+        "personas calificadas",
+        "Masculino",
+        "Sustitución de 'varón/varones' por redacción neutra.",
+    ),
+    (
+        r"\bedad(?:\s+maxima|\s+referencial|\s+limite)?\s*:?\s*(?:de\s+|hasta\s+)?\d{2}\s+anos\b",
+        "sin restricciones de edad",
+        "Demográfico",
+        "Eliminación de límite etario máximo.",
+    ),
+    (
+        r"\bedad\s*:?\s*(?:entre|de)?\s*\d{2}\s*(?:y|a|-)\s*\d{2}\s+anos\b",
+        "sin restricciones de edad",
+        "Demográfico",
+        "Eliminación de filtro por rango de edad.",
+    ),
+    (
+        r"(?<!y\s)(?<!o\s)(?<!\/)\b(?:anfitrionas?|azafatas?)\b(?!\s*(?:y|o|\/)\s*(?:anfitrion|mozo|mesero))",
+        "personal de atención y protocolo",
+        "Femenino",
+        "Neutralización de cargo feminizado ('anfitriona'/'azafata').",
     ),
     # ==================== LGBTQ+ ====================
     (

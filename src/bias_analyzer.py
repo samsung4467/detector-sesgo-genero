@@ -20,6 +20,7 @@ from src.config import (
     METRICS_JSON_PATH,
     MODEL_DISPLAY_NAMES,
     MODELS_DIR,
+    RF_MODEL_PATH,
 )
 from src.text_utils import SPANISH_MINIMAL_STOPWORDS, fold_accents_1to1, normalize_for_ml
 
@@ -99,19 +100,19 @@ _ALWAYS_BIASED_RE = re.compile(
 BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
     # ==================== EXCLUYENTE ====================
     (
-        r"\brequisito excluyente\s*:\s*sexo\s+(?:masculino|femenino)\b",
+        r"\brequisito excluyente\s*:\s*sexo\s+femenino\b",
         "Excluyente",
-        "Establece el sexo como filtro excluyente para acceder al empleo.",
+        "Establece el sexo femenino como filtro excluyente para acceder al empleo.",
         "Eliminar el filtro de sexo y especificar competencias objetivas del puesto.",
     ),
     (
-        r"\b(?:solo|solamente|unicamente|exclusivamente)\s+(?:hombres|varones|caballeros|mujeres|damas|personal masculino|personal femenino|candidatos varones|candidatos masculinos|candidatas mujeres|candidatas femeninas|postulantes de sexo (?:masculino|femenino)|personal del sexo (?:masculino|femenino))\b",
+        r"\b(?:solo|solamente|unicamente|exclusivamente)\s+(?:mujeres|damas|personal femenino|candidatas mujeres|candidatas femeninas|postulantes de sexo femenino|personal del sexo femenino)\b",
         "Excluyente",
-        "Restringe la postulación exclusivamente a un género específico.",
+        "Restringe la postulación exclusivamente a mujeres.",
         "Convocatoria abierta a todas las personas que cumplan con los requisitos técnicos.",
     ),
     (
-        r"\babstenerse\s+(?:mujeres|hombres|varones|madres|candidatas|postulantes del sexo opuesto)(?:\s+de\s+postularse|\s+de\s+enviar\s+su\s+hoja\s+de\s+vida)?\b",
+        r"\babstenerse\s+(?:mujeres|hombres|varones|damas|caballeros|senoritas|madres|candidatas|postulantes del sexo opuesto|personas\s+con\s+hijos)(?:\s+de\s+postularse|\s+de\s+postular|\s+de\s+enviar\s+su\s+hoja\s+de\s+vida)?\b",
         "Excluyente",
         "Excluye explícitamente a personas por su género o maternidad.",
         "Eliminar la cláusula de exclusión.",
@@ -164,29 +165,53 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
         "Penaliza a personas con tareas de cuidado o responsabilidades familiares.",
         "Especificar objetivamente los horarios o disponibilidad requerida por el puesto.",
     ),
-    # Títulos con género exclusivo ("recepcionista mujer", "ingeniero hombre", etc.)
+    # Títulos con género femenino exclusivo ("recepcionista mujer", "(Mujer)", "- Mujer", "MUJERES")
     (
-        r"\b(?:recepcionista|ingenier[oa]|abogad[oa]|asistente|secretari[oa]|vendedor[a]?|ejecutiv[oa]|gerent[ea]|supervisor[a]?|coordinador[a]?|analista|desarrollador[a]?|programador[a]?|tecnic[oa]|operari[oa]|auxiliar|contador[a]?|arquitect[oa]|auditor[a]?|chofer|conductor[a]?|jefe|jefa|encargad[oa]|especialista|profesional|administrativ[oa]|cajer[oa]|meser[oa]|camarer[oa]|personal|candidat[oa]|postulante|disenador[a]?|medico|medica|enfermer[oa]|docente|profesor[a]?)(?:\s+de\s+\w+)?\s+(?:mujer|mujeres|hombre|hombres|varon|varones|femenin[oa]|masculin[oa]|dama|caballero)\b",
+        r"\b(?:recepcionista|ingenier[oa]|abogad[oa]|asistente|secretari[oa]|vendedor[a]?|ejecutiv[oa]|gerent[ea]|supervisor[a]?|coordinador[a]?|analista|desarrollador[a]?|programador[a]?|tecnic[oa]|operari[oa]|auxiliar|contador[a]?|arquitect[oa]|auditor[a]?|chofer|conductor[a]?|jefe|jefa|encargad[oa]|especialista|profesional|administrativ[oa]|cajer[oa]|meser[oa]|camarer[oa]|personal|candidat[oa]|postulante|disenador[a]?|medico|medica|enfermer[oa]|docente|profesor[a]?)(?:\s+de\s+\w+){0,2}\s+(?:mujer|mujeres|femenin[oa]|dama|damas)\b",
         "Excluyente",
-        "Asocia explícitamente el título del puesto a un género exclusivo (p. ej., 'recepcionista mujer' o 'ingeniero hombre').",
-        "Utilizar denominación neutra del cargo sin restringir por sexo (p. ej., 'persona especialista en recepción' o 'profesional en ingeniería').",
+        "Asocia explícitamente el título del puesto exclusivamente a mujeres (p. ej., 'recepcionista mujer' o 'personal femenino').",
+        "Utilizar denominación neutra del cargo sin restringir por sexo.",
     ),
     (
-        r"\b(?:mujer|hombre|varon|dama|caballero)\s+(?:recepcionista|ingenier[oa]|abogad[oa]|asistente|secretari[oa]|vendedor[a]?|ejecutiv[oa]|gerent[ea]|supervisor[a]?|coordinador[a]?|analista|desarrollador[a]?|programador[a]?|tecnic[oa]|operari[oa]|auxiliar|contador[a]?|arquitect[oa]|auditor[a]?|chofer|conductor[a]?|jefe|jefa|encargad[oa]|administrativ[oa]|cajer[oa]|disenador[a]?)\b",
+        r"\b(?:mujer|dama)\s+(?:recepcionista|ingenier[oa]|abogad[oa]|asistente|secretari[oa]|vendedor[a]?|ejecutiv[oa]|gerent[ea]|supervisor[a]?|coordinador[a]?|analista|desarrollador[a]?|programador[a]?|tecnic[oa]|operari[oa]|auxiliar|contador[a]?|arquitect[oa]|auditor[a]?|chofer|conductor[a]?|jefe|jefa|encargad[oa]|administrativ[oa]|cajer[oa]|disenador[a]?)\b",
         "Excluyente",
-        "Vincula el cargo a un sexo exclusivo en la denominación del puesto.",
+        "Vincula el cargo exclusivamente a mujeres en la denominación del puesto.",
         "Redactar el título del cargo en formato neutro e inclusivo.",
     ),
     (
-        r"\b(?:reservada|destinada)\s+(?:unicamente|exclusivamente)\s+para\s+(?:varones|hombres|mujeres|personal femenino|personal masculino)\b",
+        r"\(\s*(?:solo\s+)?(?:mujer(?:es)?|damas?|femenino)\s*\)",
+        "Excluyente",
+        "Restringe el puesto exclusivamente a mujeres mediante etiqueta entre paréntesis (p. ej., '(Mujer)').",
+        "Eliminar la restricción de sexo entre paréntesis del título o descripción.",
+    ),
+    (
+        r"(?:[-–—/|:]\s*)\b(?:mujer(?:es)?|damas?)\b(?!\s*(?:y|o|\/)\s*(?:varon(?:es)?|hombre(?:s)?|caballeros?))",
+        "Excluyente",
+        "Restringe la vacante exclusivamente a mujeres en el título o encabezado (p. ej., '- Mujer').",
+        "Suprimir la especificación de sexo en el título de la oferta.",
+    ),
+    (
+        r"\b(?:operari[oa]s?|personal|auxiliar(?:es)?|ayudantes?|reponedor(?:es)?|almaceneros?|mozos?|vendedor(?:es|as)?|promotor(?:es|as)?|cajer[oa]s?|limpieza|produccion|seguridad|choferes?|conductores?|estibadores?|tecnic[oa]s?)(?:\s+de\s+\w+){0,2}\s+(?:mujeres|mujer|damas|femenino|femenina)\b",
+        "Excluyente",
+        "Asocia el puesto operativo o comercial exclusivamente a mujeres.",
+        "Redactar el puesto de forma neutra sin restringir por sexo.",
+    ),
+    (
+        r"\b(?:buscamos|requerimos|solicitamos|necesitamos|convocamos|contratamos|se\s+requieren?|se\s+necesitan?)\s+(?:a\s+)?(?:mujeres|damas)\b|(?<!de\s)(?<!para\s)\bdamas\s+(?:universitarias|jovenes|de\s+buena|con\s+experiencia|para\s+trabajar|proactivas|dinamicas)\b|(?<!y\s)(?<!o\s)(?<!ni\s)(?<!hombres,\s)(?<!varones,\s)\bmujeres\b(?!\s*(?:,|y|o|\/)\s*(?:hombres|varones))(?=\s*(?:[-–—/|.\n]|$))",
+        "Excluyente",
+        "Restringe la convocatoria específicamente a mujeres o damas.",
+        "Abrir la convocatoria a todas las personas que cumplan los requisitos del puesto.",
+    ),
+    (
+        r"\b(?:reservada|destinada)\s+(?:unicamente|exclusivamente)\s+para\s+(?:mujeres|personal femenino)\b",
         "Excluyente",
         "Reserva la vacante exclusivamente a un solo género.",
         "Indicar que la vacante está abierta a todas las personas calificadas.",
     ),
     (
-        r"\bsexo\s+(?:masculino|femenino)\s+excluyente\b|\bvaron\s+excluyente\b|\bpertenecer\s+al\s+sexo\s+(?:masculino|femenino)\b",
+        r"\bsexo\s+femenino\s+excluyente\b|\bpertenecer\s+al\s+sexo\s+femenino\b",
         "Excluyente",
-        "Impone el sexo como criterio obligatorio de selección.",
+        "Impone el sexo femenino como criterio obligatorio de selección.",
         "Suprimir el criterio de sexo.",
     ),
     (
@@ -282,7 +307,7 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
     ),
     # ==================== DEMOGRÁFICO ====================
     (
-        r"\bedad(?:\s+excluyente|\s+comprendida)?\s+(?:entre|de)\s+\d{2}\s+y\s+\d{2}\s+anos\b|\bedad\s+maxima\s+(?:de\s+)?\d{2}\s+anos(?:\s+excluyente)?\b",
+        r"\bedad(?:\s+excluyente|\s+comprendida|\s+referencial)?\s*:?\s*(?:entre|de)?\s*\d{2}\s*(?:y|a|-)\s*\d{2}\s+anos\b|\bedad(?:\s+maxima|\s+referencial|\s+limite)\s*:?\s*(?:de\s+|hasta\s+)?\d{2}(?:\s+anos)?(?:\s+excluyente)?\b",
         "Demográfico",
         "Establece un filtro discriminatorio por rango de edad (edadismo).",
         "Eliminar límites de edad y especificar años de experiencia si son necesarios.",
@@ -300,7 +325,7 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
         "Sustituir por 'con competencias acordes al puesto'.",
     ),
     (
-        r"\b(?:joven(?:es)?\s+(?:recien\s+egresad[oa]s?\s+)?|profesional\s+|talento\s+)?menor(?:es)?\s+de\s+\d{2}\s+anos\b|\b(?:de\s+)?entre\s+\d{2}\s+y\s+\d{2}\s+anos\b(?!\s+de\s+experiencia)|\bde\s+\d{2}\s+a\s+\d{2}\s+anos\b(?!\s+de\s+experiencia)",
+        r"\b(?:joven(?:es)?\s+(?:recien\s+egresad[oa]s?\s+)?|profesional\s+|talento\s+)?menor(?:es)?\s+de\s+\d{2}\s+anos\b|\b(?:de\s+)?entre\s+\d{2}\s+(?:y|a)\s+\d{2}\s+anos\b(?!\s+de\s+experiencia)|\bde\s+\d{2}\s+a\s+\d{2}\s+anos\b(?!\s+de\s+experiencia)",
         "Demográfico",
         "Limita la postulación a un rango etario específico.",
         "Sustituir por 'con competencias acordes al puesto' o el nivel de seniority requerido.",
@@ -348,6 +373,61 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
         "Reemplazar por 'con competencias acordes al puesto' o indicar el nivel de experiencia requerido.",
     ),
     # ==================== MASCULINO ====================
+    # Restricciones explícitas hacia hombres/varones/caballeros/personal masculino
+    (
+        r"\brequisito excluyente\s*:\s*sexo\s+masculino\b|\bsexo\s+masculino\s+excluyente\b|\bvaron\s+excluyente\b|\bpertenecer\s+al\s+sexo\s+masculino\b",
+        "Masculino",
+        "Impone el sexo masculino como requisito obligatorio de selección.",
+        "Suprimir el criterio de sexo y evaluar únicamente competencias objetivas.",
+    ),
+    (
+        r"\b(?:solo|solamente|unicamente|exclusivamente)\s+(?:hombres|varones|caballeros|personal masculino|candidatos varones|candidatos masculinos|postulantes de sexo masculino|personal del sexo masculino)\b",
+        "Masculino",
+        "Restringe la postulación exclusivamente a hombres o varones.",
+        "Abrir la convocatoria a todas las personas que cumplan con los requisitos técnicos.",
+    ),
+    (
+        r"\b(?:reservada|destinada)\s+(?:unicamente|exclusivamente)\s+para\s+(?:varones|hombres|personal masculino)\b",
+        "Masculino",
+        "Reserva la vacante exclusivamente para hombres o personal masculino.",
+        "Indicar que la vacante está abierta a todas las personas calificadas.",
+    ),
+    (
+        r"\(\s*(?:solo\s+)?(?:varon(?:es)?|hombres?|caballeros?|masculino)\s*\)",
+        "Masculino",
+        "Restringe el puesto específicamente a varones mediante etiqueta entre paréntesis (p. ej., '(Varón)' o '(HOMBRE)').",
+        "Eliminar la restricción de sexo entre paréntesis del título o descripción.",
+    ),
+    (
+        r"(?:[-–—/|:]\s*)\b(?:varon(?:es)?|caballeros?|hombres?)\b(?!\s*(?:y|o|\/)\s*(?:mujer(?:es)?|damas?))",
+        "Masculino",
+        "Restringe la vacante a varones en el título o encabezado (p. ej., '- Varón' o '/ Varones').",
+        "Suprimir la especificación de sexo en el título de la oferta.",
+    ),
+    (
+        r"\b(?:recepcionista|ingenier[oa]|abogad[oa]|asistente|secretari[oa]|vendedor[a]?|ejecutiv[oa]|gerent[ea]|supervisor[a]?|coordinador[a]?|analista|desarrollador[a]?|programador[a]?|tecnic[oa]|operari[oa]s?|auxiliar(?:es)?|ayudantes?|reponedor(?:es)?|almaceneros?|mozos?|promotor(?:es|as)?|contador[a]?|arquitect[oa]|auditor[a]?|chofer(?:es)?|conductor(?:es|as)?|jefe|jefa|encargad[oa]|especialista|profesional|administrativ[oa]|cajer[oa]s?|meser[oa]|camarer[oa]|personal|candidat[oa]|postulante|disenador[a]?|medico|medica|enfermer[oa]|docente|profesor[a]?|limpieza|produccion|seguridad|estibadores?)(?:\s+de\s+\w+){0,2}\s+(?:hombre|hombres|varon|varones|masculino|masculinos|caballero|caballeros)\b",
+        "Masculino",
+        "Asocia explícitamente el puesto a personal masculino o varones (p. ej., 'personal masculino', 'operario varón' o 'ingeniero hombre').",
+        "Utilizar denominación neutra del cargo sin restringir por sexo.",
+    ),
+    (
+        r"\b(?:hombre|varon|caballero)\s+(?:recepcionista|ingenier[oa]|abogad[oa]|asistente|secretari[oa]|vendedor[a]?|ejecutiv[oa]|gerent[ea]|supervisor[a]?|coordinador[a]?|analista|desarrollador[a]?|programador[a]?|tecnic[oa]|operari[oa]|auxiliar|contador[a]?|arquitect[oa]|auditor[a]?|chofer|conductor[a]?|jefe|jefa|encargad[oa]|administrativ[oa]|cajer[oa]|disenador[a]?)\b",
+        "Masculino",
+        "Vincula el cargo específicamente a varones en la denominación del puesto.",
+        "Redactar el título del cargo en formato neutro e inclusivo.",
+    ),
+    (
+        r"(?<!y\s)(?<!o\s)(?<!ni\s)(?<!hombres,\s)(?<!mujeres,\s)(?<!damas\s)(?<!damas,\s)\bvaron(?:es)?\b(?!\s*(?:y|o|,|\/)\s*(?:mujer|dama|femenin|persona))",
+        "Masculino",
+        "Dirige la convocatoria específicamente a varones, restringiendo el acceso por género.",
+        "Utilizar términos neutros como 'personas postulantes' o 'personal'.",
+    ),
+    (
+        r"\b(?:buscamos|requerimos|solicitamos|necesitamos|convocamos|contratamos|se\s+requieren?|se\s+necesitan?)\s+(?:a\s+)?(?:caballeros|hombres)\b|(?<!de\s)(?<!para\s)(?<!y\s)(?<!o\s)(?<!damas,\s)\bcaballeros?\b(?=\s+(?:para\s+|con\s+(?:experiencia|disponibilidad|secundaria|estudios|brevete|licencia)|de\s+\d{2}|entre\s+\d{2}|jovenes|responsables|proactivos|dinamicos|mayores))",
+        "Masculino",
+        "Dirige la vacante específicamente a caballeros u hombres.",
+        "Reemplazar por 'personas postulantes' o 'personal'.",
+    ),
     (
         r"\b(?:un\s+verdadero\s+)?tiburon\s+(?:de\s+la\s+tecnologia|comercial|de\s+negocios|en\s+su\s+area|decidido)\b|\btiburon\b",
         "Masculino",
@@ -391,16 +471,10 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
         "Utilizar descriptores profesionales neutros enfocados en competencias.",
     ),
     (
-        r"\b(?:caracter\s+fuerte|duro\s+e\s+imponente|recio\s+y\s+dominante|competitivo\s+y\s+ambicioso|voraz\s+y\s+dispuesto\s+a\s+dominar|implacable\s+y\s+competitivo|ambicioso\s+con\s+mentalidad\s+ganadora|audaz\s+y\s+contundente|combativo)\b|(?<!salario\s)(?<!salario\sbase\s)(?<!sueldo\s)(?<!remuneracion\s)(?<!compensacion\s)(?<!paquete\s)(?<!mercado\s)(?<!entorno\s)(?<!ritmo\s)\bcompetitiv[oa]s?\b",
+        r"\b(?:caracter\s+fuerte|duro\s+e\s+imponente|recio\s+y\s+dominante|competitivo\s+y\s+ambicioso|voraz\s+y\s+dispuesto\s+a\s+dominar|implacable\s+y\s+competitivo|ambicioso\s+con\s+mentalidad\s+ganadora|audaz\s+y\s+contundente|combativo)\b|(?<!salario\s)(?<!salario\sbase\s)(?<!sueldo\s)(?<!remuneracion\s)(?<!compensacion\s)(?<!beneficios\s)(?<!paquete\s)(?<!mercado\s)(?<!entorno\s)(?<!ritmo\s)\bcompetitiv[oa]s?\b",
         "Masculino",
         "Adjetivos agentivos o hipercompetitivos asociados a codificación de género masculina.",
         "Sustituir por competencias observables como 'orientado al logro' o 'toma de decisiones fundamentada'.",
-    ),
-    (
-        r"\bun\s+(?:arquitecto|analista|desarrollador|ingeniero|programador|jefe|supervisor|vendedor|ejecutivo|gerente|coordinador|auditor|abogado|disenador|cientifico|tecnico|comprador|consultor|administrador|contador|director|lider)(?:\s+(?:de\s+(?:software|datos|sistemas|proyectos|marketing|operaciones|ventas|finanzas|producto|negocio|calidad|infraestructura|nube|cloud|soluciones|seguridad|\w+)|backend|frontend|fullstack|full\s+stack|cloud|comercial|financiero|funcional|senior|junior|semi-senior|b2b))*\b",
-        "Masculino",
-        "Uso de cargo en masculino genérico singular ('un ...') que puede sustituirse por redacción neutra.",
-        "Usar fórmulas neutras como 'profesional de arquitectura de software' o 'una persona especialista en...'.",
     ),
     # ==================== FEMENINO ====================
     (
@@ -440,10 +514,10 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
         "Sustituir por competencias medibles como 'comunicación asertiva, colaboración y trato profesional'.",
     ),
     (
-        r"\b(?:una\s+)?(?:asistente\s+administrativa|asistente\s+femenina|secretaria\s+ejecutiva|chica\s+ordenada|chica\s+simpatica(?:\s+y\s+atenta)?|chica\s+encantadora|dama\s+(?:elegante|de\s+trato\s+calido)|mujer\s+(?:armoniosa|simpatica|calida)|perfil\s+femenino\s+colaborador)\b|\brecepcionista\b",
+        r"\b(?:una\s+)?(?:asistente\s+administrativa|asistente\s+femenina|secretaria\s+ejecutiva|chica\s+ordenada|chica\s+simpatica(?:\s+y\s+atenta)?|chica\s+encantadora|dama\s+(?:elegante|de\s+trato\s+calido)|mujer\s+(?:armoniosa|simpatica|calida)|perfil\s+femenino\s+colaborador)\b|\brecepcionista\b|(?<!y\s)(?<!o\s)(?<!\/)\b(?:anfitrionas?|azafatas?)\b(?!\s*(?:y|o|\/)\s*(?:anfitrion|mozo|mesero))",
         "Femenino",
-        "Femeniza la denominación del puesto o recurre a etiquetas estereotipadas (como 'asistente administrativa', 'recepcionista' o 'chica ordenada').",
-        "Usar títulos neutros como 'profesional de asistencia administrativa' o 'persona especialista en recepción'.",
+        "Femeniza la denominación del puesto o recurre a etiquetas estereotipadas (como 'asistente administrativa', 'recepcionista', 'anfitriona' o 'azafata').",
+        "Usar títulos neutros como 'profesional de asistencia administrativa', 'persona especialista en recepción' o 'personal de atención y protocolo'.",
     ),
 ]
 
@@ -535,12 +609,14 @@ TECHNICAL_TERM_PATTERNS: List[str] = [
 ]
 
 
-def load_model(model_key: str):
-    """Carga un pipeline entrenado desde disco."""
+def load_model(model_key: str = "random_forest"):
+    """Carga el pipeline preentrenado comprimido desde disco (sin entrenar en tiempo de ejecución)."""
+    if model_key in ("random_forest", "rf_model") and RF_MODEL_PATH.exists():
+        return joblib.load(RF_MODEL_PATH)
     model_path = MODELS_DIR / f"{model_key}.joblib"
     if not model_path.exists():
         raise FileNotFoundError(
-            f"No se encontró el modelo '{model_path}'. Ejecuta 'python -m src.train_models' primero."
+            f"No se encontró el modelo preentrenado '{RF_MODEL_PATH}'. Ejecuta 'python -m src.train_models' primero."
         )
     return joblib.load(model_path)
 
@@ -1190,11 +1266,28 @@ def _assess_ml_reliability(
     return "media", "Media", media_reasons
 
 
+_EXPLICIT_MALE_RESTRICTION_RE = re.compile(
+    r"\b(?:varon(?:es)?|personal\s+masculino|sexo\s+masculino|solo\s+hombres|solamente\s+hombres|"
+    r"unicamente\s+hombres|exclusivamente\s+hombres|caballeros?|\(\s*hombres?\s*\)|"
+    r"personal\s+de\s+\w+\s+masculino|masculino\s+excluyente)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _span_weight(span: DetectedSpan) -> float:
+    """Peso de severidad de un span; da prioridad alta a restricciones explícitas de varones."""
+    if span.category == "Masculino":
+        folded = fold_accents_1to1(span.text).lower()
+        if _EXPLICIT_MALE_RESTRICTION_RE.search(folded):
+            return 26.0
+    return _SPAN_SEVERITY_WEIGHTS.get(span.category, 15.0)
+
+
 def _select_dominant_lexical_category(spans: List[DetectedSpan]) -> str:
     """Selecciona la categoría léxica dominante ponderando severidad y frecuencia de frases."""
     weighted_totals: Counter[str] = Counter()
     for span in spans:
-        weighted_totals[span.category] += _SPAN_SEVERITY_WEIGHTS.get(span.category, 15.0)
+        weighted_totals[span.category] += _span_weight(span)
     return max(
         weighted_totals.keys(),
         key=lambda cat: (weighted_totals[cat], -_CATEGORY_SEVERITY_PRIORITY.get(cat, 5)),
@@ -1273,7 +1366,7 @@ def analyze_job_posting(text: str, model_key: str | None = None, pipeline=None) 
             predicted_class = dominant_lex_cat
 
         span_penalty = min(
-            15.0 + sum(_SPAN_SEVERITY_WEIGHTS.get(s.category, 15.0) for s in spans),
+            15.0 + sum(_span_weight(s) for s in spans),
             90.0,
         )
         lexical_score = max(0.0, 100.0 - span_penalty)
@@ -1283,10 +1376,13 @@ def analyze_job_posting(text: str, model_key: str | None = None, pipeline=None) 
             1,
         )
 
+        has_explicit_sex_restriction = ("Excluyente" in detected_categories) or any(
+            _span_weight(s) >= 26.0 for s in spans
+        )
         if (
             inclusivity_score < 45.0
             or len(spans) >= 3
-            or ("Excluyente" in detected_categories and (len(spans) >= 2 or inclusivity_score < 55.0))
+            or (has_explicit_sex_restriction and (len(spans) >= 2 or inclusivity_score < 55.0))
         ):
             risk_level = "Alto"
         else:

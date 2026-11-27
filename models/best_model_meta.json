@@ -1,5 +1,6 @@
 {
   "model_key": "random_forest",
   "display_name": "Random Forest",
-  "selection_criterion": "f1_macro (test set)"
+  "model_file": "models/rf_model.joblib",
+  "selection_criterion": "f1_macro (test set 20% estratificado)"
 }

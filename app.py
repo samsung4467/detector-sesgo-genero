@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import gc
 import html
-import json
 from pathlib import Path
 from typing import Dict
 
@@ -14,7 +14,6 @@ import streamlit as st
 
 from src.bias_analyzer import (
     analyze_job_posting,
-    load_best_model_key,
     load_model,
     load_saved_metrics,
 )
@@ -22,17 +21,13 @@ from src.config import (
     ALL_CATEGORIES,
     BIAS_CATEGORIES,
     CATEGORY_INFO,
-    CONFUSION_CSV_PATH,
-    DATASET_PATH,
-    METRICS_JSON_PATH,
-    METRICS_SUMMARY_CSV_PATH,
+    CONSOLIDATED_DATASET_PATH,
+    CONSOLIDATED_EXCEL_PATH,
     MODEL_DISPLAY_NAMES,
-    MODELS_DIR,
-    PER_CLASS_CSV_PATH,
     PRELOADED_EXAMPLES,
+    RF_MODEL_PATH,
 )
 from src.rewriter import rewrite_inclusive
-from src.train_models import train_and_evaluate
 
 st.set_page_config(
     page_title="EquiEmpleo AI — Detector de Sesgos en Avisos de Empleo",
@@ -547,16 +542,25 @@ st.markdown(
 )
 
 
-# ---------- RECURSOS EN CACHÉ ----------
+# ---------- RECURSOS EN CACHÉ (OPTIMIZADOS PARA BAJO CONSUMO DE RAM) ----------
+DATASET_TABLE_COLUMNS = [
+    "id",
+    "origen",
+    "portal",
+    "puesto",
+    "categoria",
+    "nivel_riesgo",
+    "frases_detectadas",
+    "texto",
+]
+
+
 @st.cache_resource(show_spinner=False)
-def get_cached_models() -> Dict[str, object]:
-    """Carga los 3 pipelines ML entrenados en memoria."""
-    loaded = {}
-    for key in MODEL_DISPLAY_NAMES:
-        model_path = MODELS_DIR / f"{key}.joblib"
-        if model_path.exists():
-            loaded[key] = load_model(key)
-    return loaded
+def get_cached_rf_model():
+    """Carga una sola vez en memoria el modelo Random Forest preentrenado y comprimido."""
+    model = load_model("random_forest")
+    gc.collect()
+    return model
 
 
 @st.cache_data(show_spinner=False)
@@ -566,20 +570,26 @@ def get_cached_metrics() -> dict:
 
 @st.cache_data(show_spinner=False)
 def get_cached_dataset() -> pd.DataFrame:
-    if DATASET_PATH.exists():
-        return pd.read_csv(DATASET_PATH)
-    return pd.DataFrame()
-
-
-def ensure_artifacts_ready() -> None:
-    """Si faltan modelos o métricas, ejecuta generación y entrenamiento automáticamente."""
-    missing_models = any(not (MODELS_DIR / f"{k}.joblib").exists() for k in MODEL_DISPLAY_NAMES)
-    if missing_models or not METRICS_JSON_PATH.exists() or not DATASET_PATH.exists():
-        with st.spinner("Generando dataset sintético balanceado y entrenando los 3 modelos ML..."):
-            train_and_evaluate(regenerate_dataset=not DATASET_PATH.exists())
-        get_cached_models.clear()
-        get_cached_metrics.clear()
-        get_cached_dataset.clear()
+    """Carga solo columnas necesarias del CSV consolidado y trunca la vista previa del texto a 300 car."""
+    if not CONSOLIDATED_DATASET_PATH.exists():
+        return pd.DataFrame(columns=DATASET_TABLE_COLUMNS)
+    df = pd.read_csv(
+        CONSOLIDATED_DATASET_PATH,
+        usecols=DATASET_TABLE_COLUMNS,
+        dtype={
+            "id": "string",
+            "origen": "category",
+            "portal": "category",
+            "puesto": "string",
+            "categoria": "category",
+            "nivel_riesgo": "category",
+            "frases_detectadas": "string",
+            "texto": "string",
+        },
+    )
+    df["texto"] = df["texto"].fillna("").map(lambda t: (t[:300] + "…") if len(t) > 300 else t)
+    gc.collect()
+    return df
 
 
 def render_category_legend() -> None:
@@ -659,32 +669,6 @@ def make_bias_probability_chart(bias_probs: Dict[str, float]) -> go.Figure:
     return apply_light_plotly_theme(fig)
 
 
-def make_confusion_matrix_figure(cm_matrix: list, labels: list, title: str) -> go.Figure:
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=cm_matrix,
-            x=labels,
-            y=labels,
-            colorscale="Blues",
-            text=cm_matrix,
-            texttemplate="%{text}",
-            textfont={"size": 13},
-            colorbar=dict(tickfont=dict(color="#334155"), title=dict(font=dict(color="#334155"))),
-            hovertemplate="Real: <b>%{y}</b><br>Predicho: <b>%{x}</b><br>Casos: %{z}<extra></extra>",
-            showscale=True,
-        )
-    )
-    fig.update_layout(
-        title=dict(text=title, font=dict(color="#0F172A", size=15)),
-        xaxis_title="Clase Predicha",
-        yaxis_title="Clase Real",
-        yaxis=dict(autorange="reversed"),
-        height=420,
-        margin=dict(l=20, r=20, t=50, b=30),
-    )
-    return apply_light_plotly_theme(fig)
-
-
 def read_file_bytes(path: Path) -> bytes:
     return path.read_bytes() if path.exists() else b""
 
@@ -714,73 +698,6 @@ def render_findings_html_table(spans) -> str:
         '<th class="col-cat">Categoría</th>'
         '<th style="width:33%;">Motivo del sesgo</th>'
         '<th style="width:31%;">Sugerencia inclusiva</th>'
-        "</tr></thead>"
-        f"<tbody>{''.join(rows_html)}</tbody>"
-        "</table></div>"
-    )
-
-
-def render_mini_ml_comparison_table(comp_results) -> str:
-    """Renderiza una mini-tabla HTML compacta con cabeceras abreviadas para evitar recortes."""
-    short_headers = {
-        "Masculino": "Masc.",
-        "Femenino": "Fem.",
-        "Excluyente": "Excl.",
-        "LGBTQ+": "LGBTQ+",
-        "Demográfico": "Demog.",
-        "Neutro": "Neutro",
-    }
-    short_preds = {
-        "Masculino": "Masc.",
-        "Femenino": "Fem.",
-        "Excluyente": "Excl.",
-        "LGBTQ+": "LGBTQ+",
-        "Demográfico": "Demog.",
-        "Neutro": "Neutro",
-    }
-    rows_html = []
-    for m_name, m_res in comp_results:
-        pred_cat = m_res.raw_ml_category
-        meta = CATEGORY_INFO[pred_cat]
-        pred_badge = (
-            f'<span class="mini-pred-pill" title="Predicción cruda ML: {html.escape(pred_cat)}" '
-            f'style="background:{meta["bg"]}; color:{meta["text"]}; '
-            f'border:1px solid {meta["border"]};">{html.escape(short_preds[pred_cat])}</span>'
-        )
-        prob_cells = []
-        for cat in ALL_CATEGORIES:
-            pct = m_res.probabilities[cat] * 100.0
-            style = "font-weight:700; color:#0F172A;" if cat == pred_cat else "color:#475569;"
-            prob_cells.append(f'<td style="{style}">{pct:.1f}%</td>')
-        rows_html.append(
-            "<tr>"
-            f'<td title="{html.escape(m_name)}">{html.escape(m_name)}</td>'
-            f"<td>{pred_badge}</td>"
-            + "".join(prob_cells)
-            + "</tr>"
-        )
-
-    header_cells = "".join(
-        f'<th title="{html.escape(cat)}">{html.escape(short_headers[cat])}</th>'
-        for cat in ALL_CATEGORIES
-    )
-    return (
-        '<div class="mini-ml-wrap">'
-        '<table class="mini-ml-table">'
-        "<colgroup>"
-        '<col style="width:20%;">'
-        '<col style="width:14%;">'
-        '<col style="width:11%;">'
-        '<col style="width:11%;">'
-        '<col style="width:11%;">'
-        '<col style="width:11%;">'
-        '<col style="width:11%;">'
-        '<col style="width:11%;">'
-        "</colgroup>"
-        "<thead><tr>"
-        "<th>Modelo</th>"
-        '<th title="Predicción cruda del clasificador ML">Pred. ML</th>'
-        f"{header_cells}"
         "</tr></thead>"
         f"<tbody>{''.join(rows_html)}</tbody>"
         "</table></div>"
@@ -932,11 +849,16 @@ def render_changes_html_table(changes) -> str:
     )
 
 
-# ---------- INICIALIZACIÓN ----------
-ensure_artifacts_ready()
-models_dict = get_cached_models()
+# ---------- INICIALIZACIÓN (SOLO CARGA DE ARTEFACTOS PREENTRENADOS, SIN ENTRENAMIENTO) ----------
+if not RF_MODEL_PATH.exists():
+    st.error(
+        f"No se encontró el modelo preentrenado `{RF_MODEL_PATH.name}`. "
+        "Ejecuta offline `python -m src.train_models` antes de desplegar."
+    )
+    st.stop()
+
+rf_model = get_cached_rf_model()
 metrics_data = get_cached_metrics()
-best_model_key = load_best_model_key()
 
 if "job_text" not in st.session_state:
     first_example_name = next(iter(PRELOADED_EXAMPLES.keys()))
@@ -951,17 +873,20 @@ if "last_analyzed_text" not in st.session_state:
 
 
 # ---------- BARRA LATERAL ----------
+selected_model_key = "random_forest"
 with st.sidebar:
     st.markdown("## ⚙️ Configuración")
-    model_keys = list(MODEL_DISPLAY_NAMES.keys())
-    default_idx = model_keys.index(best_model_key) if best_model_key in model_keys else 0
-    selected_model_key = st.selectbox(
-        "Clasificador ML activo",
-        options=model_keys,
-        index=default_idx,
-        format_func=lambda k: (
-            f"{MODEL_DISPLAY_NAMES[k]} ⭐ (Mejor)" if k == best_model_key else MODEL_DISPLAY_NAMES[k]
-        ),
+    ds_total_sidebar = metrics_data.get("dataset", {}).get("total_samples", 1400) if metrics_data else 1400
+    st.markdown(
+        '<div style="background:#EFF6FF; border:1px solid #BFDBFE; border-left:4px solid #2563EB; '
+        'border-radius:8px; padding:10px 12px; margin-bottom:10px;">'
+        '<div style="font-size:0.74rem; color:#1E40AF; font-weight:700; text-transform:uppercase; '
+        'letter-spacing:0.03em;">Motor ML Fijo</div>'
+        '<div style="font-size:1.02rem; font-weight:800; color:#0F172A; margin-top:2px;">🤖 Random Forest</div>'
+        f'<div style="font-size:0.76rem; color:#475569; margin-top:2px;">Entrenado con {ds_total_sidebar:,} avisos '
+        "(80/20 estratificado)</div>"
+        "</div>",
+        unsafe_allow_html=True,
     )
 
     if metrics_data and selected_model_key in metrics_data.get("models", {}):
@@ -989,15 +914,6 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    st.divider()
-    if st.button("🔄 Reentrenar modelos ML", width="stretch"):
-        with st.spinner("Reentrenando Random Forest, SVM y Decision Tree..."):
-            train_and_evaluate(regenerate_dataset=False)
-        get_cached_models.clear()
-        get_cached_metrics.clear()
-        st.success("Modelos y métricas actualizados correctamente.")
-        st.rerun()
-
 
 # ---------- ENCABEZADO ----------
 st.markdown(
@@ -1005,7 +921,7 @@ st.markdown(
     <div class="main-header">
         <h1>⚖️ Plataforma de Detección y Mitigación de Sesgos de Género en Avisos de Empleo</h1>
         <p>
-            Análisis NLP en español con TF-IDF + Machine Learning (Random Forest, SVM y Decision Tree),
+            Análisis NLP híbrido en español (TF-IDF + Random Forest entrenado con 1,400 avisos sintéticos y reales de Perú),
             resaltado explicable de frases sesgadas y reescritura inclusiva preservando requisitos técnicos.
         </p>
     </div>
@@ -1015,12 +931,12 @@ st.markdown(
 
 
 # ---------- PESTAÑAS PRINCIPALES ----------
-total_dataset_count = metrics_data.get("dataset", {}).get("total_samples", 1200)
-tab_analyzer, tab_metrics, tab_dataset = st.tabs(
+df_dataset_preview = get_cached_dataset()
+total_dataset_count = len(df_dataset_preview) if not df_dataset_preview.empty else 1400
+tab_analyzer, tab_dataset = st.tabs(
     [
         "🔍 Analizador y Mitigador",
-        "📊 Comparativa de Modelos ML",
-        f"🗂️ Dataset Sintético ({total_dataset_count} avisos)",
+        f"📁 Dataset Consolidado ({total_dataset_count:,} avisos)",
     ]
 )
 
@@ -1079,7 +995,7 @@ with tab_analyzer:
         analysis = analyze_job_posting(
             st.session_state.job_text,
             model_key=selected_model_key,
-            pipeline=models_dict.get(selected_model_key),
+            pipeline=rf_model,
         )
 
         # KPIs principales
@@ -1205,26 +1121,6 @@ with tab_analyzer:
             ):
                 st.markdown(render_ml_explainability_html(analysis), unsafe_allow_html=True)
 
-            with st.expander("🤖 Comparar predicción entre los 3 modelos ML en esta oferta", expanded=True):
-                comp_results = []
-                for m_key, m_name in MODEL_DISPLAY_NAMES.items():
-                    m_res = analyze_job_posting(
-                        st.session_state.job_text,
-                        model_key=m_key,
-                        pipeline=models_dict.get(m_key),
-                    )
-                    comp_results.append((m_name, m_res))
-                st.markdown(render_mini_ml_comparison_table(comp_results), unsafe_allow_html=True)
-                if any(
-                    m_res.decision_mode == "calibrated_neutral"
-                    or m_res.predicted_class != m_res.raw_ml_category
-                    for _, m_res in comp_results
-                ):
-                    st.caption(
-                        "Por transparencia académica, esta tabla conserva la predicción y probabilidades "
-                        "crudas de cada clasificador ML; el diagnóstico principal aplica la calibración híbrida."
-                    )
-
             if analysis.technical_terms:
                 st.markdown("#### 🛠️ Requisitos técnicos identificados (protegidos)")
                 pills_html = "".join(
@@ -1247,7 +1143,7 @@ with tab_analyzer:
             re_analysis = analyze_job_posting(
                 rw.rewritten_text,
                 model_key=selected_model_key,
-                pipeline=models_dict.get(selected_model_key),
+                pipeline=rf_model,
             )
 
             # Impacto antes vs después
@@ -1321,191 +1217,138 @@ with tab_analyzer:
                 st.info("La oferta ya se encontraba redactada con lenguaje neutro; no se requirieron sustituciones.")
 
 
-# ==================== TAB 2: COMPARATIVA DE MODELOS ML ====================
-with tab_metrics:
-    st.markdown("### Evaluación comparativa de clasificadores ML (TF-IDF)")
-
-    if not metrics_data:
-        st.warning("No se encontraron métricas guardadas. Ejecuta el entrenamiento desde la barra lateral.")
-    else:
-        ds_meta = metrics_data["dataset"]
-        best_meta = metrics_data["best_model"]
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Dataset", f"{ds_meta['total_samples']} avisos")
-        m2.metric("Train / Test Split", f"{ds_meta['train_samples']} / {ds_meta['test_samples']} (80/20)")
-        m3.metric("Clases Evaluadas", f"{len(ds_meta['classes'])} balanceadas")
-        m4.metric("Mejor Clasificador", best_meta["display_name"])
-
-        st.markdown("#### 📋 Tabla resumen de métricas (Conjunto de Prueba + CV 5-Fold)")
-        summary_df = pd.read_csv(METRICS_SUMMARY_CSV_PATH)
-        display_summary = summary_df[
-            [
-                "modelo",
-                "accuracy",
-                "precision_macro",
-                "recall_macro",
-                "f1_macro",
-                "cv5_accuracy_mean",
-                "cv5_f1_macro_mean",
-                "cv5_f1_macro_std",
-            ]
-        ].rename(
-            columns={
-                "modelo": "Modelo",
-                "accuracy": "Accuracy",
-                "precision_macro": "Precision (Macro)",
-                "recall_macro": "Recall (Macro)",
-                "f1_macro": "F1-Score (Macro)",
-                "cv5_accuracy_mean": "CV-5 Accuracy",
-                "cv5_f1_macro_mean": "CV-5 F1-Macro",
-                "cv5_f1_macro_std": "CV-5 F1 Std",
-            }
-        )
-        st.dataframe(display_summary, width="stretch", hide_index=True)
-
-        # Gráfico comparativo de métricas
-        melted = summary_df.melt(
-            id_vars=["modelo"],
-            value_vars=["accuracy", "precision_macro", "recall_macro", "f1_macro"],
-            var_name="Métrica",
-            value_name="Valor",
-        )
-        metric_labels = {
-            "accuracy": "Accuracy",
-            "precision_macro": "Precision (Macro)",
-            "recall_macro": "Recall (Macro)",
-            "f1_macro": "F1-Score (Macro)",
-        }
-        melted["Métrica"] = melted["Métrica"].map(metric_labels)
-        fig_comp = px.bar(
-            melted,
-            x="Métrica",
-            y="Valor",
-            color="modelo",
-            barmode="group",
-            text_auto=".3f",
-            title="Comparación de desempeño en conjunto de prueba (Test 20%)",
-            color_discrete_sequence=["#2563EB", "#7C3AED", "#059669"],
-        )
-        fig_comp.update_traces(textfont=dict(color="#0F172A"))
-        fig_comp.update_layout(yaxis=dict(range=[0, 1.08]), legend_title="Modelo", height=380)
-        apply_light_plotly_theme(fig_comp)
-        st.plotly_chart(fig_comp, theme=None, width="stretch")
-
-        # Matrices de confusión y métricas por clase
-        st.markdown("#### 🧩 Matriz de confusión y reporte por clase")
-        cm_model_key = st.selectbox(
-            "Selecciona un clasificador para inspeccionar su matriz de confusión:",
-            options=list(MODEL_DISPLAY_NAMES.keys()),
-            format_func=lambda k: MODEL_DISPLAY_NAMES[k],
-            key="cm_selector",
-        )
-        sel_model_data = metrics_data["models"][cm_model_key]
-        cm_col1, cm_col2 = st.columns([1.2, 1.0], gap="large")
-        with cm_col1:
-            fig_cm = make_confusion_matrix_figure(
-                sel_model_data["confusion_matrix"]["matrix"],
-                sel_model_data["confusion_matrix"]["labels"],
-                f"Matriz de Confusión — {sel_model_data['display_name']}",
-            )
-            st.plotly_chart(fig_cm, theme=None, width="stretch")
-        with cm_col2:
-            st.markdown(f"**Métricas por clase — {sel_model_data['display_name']}**")
-            per_cls_df = pd.DataFrame.from_dict(sel_model_data["per_class"], orient="index").reset_index()
-            per_cls_df.columns = ["Categoría", "Precision", "Recall", "F1-Score", "Soporte"]
-            st.dataframe(per_cls_df, width="stretch", hide_index=True)
-
-        st.divider()
-        st.markdown("#### 📥 Descargar reportes exactos para tu informe (JSON / CSV)")
-        d1, d2, d3, d4 = st.columns(4)
-        d1.download_button(
-            "📄 model_metrics.json",
-            data=read_file_bytes(METRICS_JSON_PATH),
-            file_name="model_metrics.json",
-            mime="application/json",
-            width="stretch",
-        )
-        d2.download_button(
-            "📊 model_metrics_summary.csv",
-            data=read_file_bytes(METRICS_SUMMARY_CSV_PATH),
-            file_name="model_metrics_summary.csv",
-            mime="text/csv",
-            width="stretch",
-        )
-        d3.download_button(
-            "📑 per_class_metrics.csv",
-            data=read_file_bytes(PER_CLASS_CSV_PATH),
-            file_name="per_class_metrics.csv",
-            mime="text/csv",
-            width="stretch",
-        )
-        d4.download_button(
-            "🧩 confusion_matrices.csv",
-            data=read_file_bytes(CONFUSION_CSV_PATH),
-            file_name="confusion_matrices.csv",
-            mime="text/csv",
-            width="stretch",
-        )
-
-
-# ==================== TAB 3: EXPLORADOR DEL DATASET ====================
+# ==================== TAB 2: DATASET CONSOLIDADO (1,400 AVISOS) ====================
 with tab_dataset:
-    st.markdown("### Explorador del Dataset Sintético Balanceado en Español")
+    st.markdown("### Explorador del Dataset Consolidado (1,200 Sintéticos + 200 Reales de Perú)")
     df_dataset = get_cached_dataset()
 
     if df_dataset.empty:
-        st.warning("Dataset no encontrado.")
+        st.warning("Dataset consolidado no encontrado.")
     else:
-        counts = df_dataset["categoria"].value_counts().reindex(ALL_CATEGORIES).reset_index()
-        counts.columns = ["Categoría", "Cantidad"]
+        has_origen = "origen" in df_dataset.columns
+        has_portal = "portal" in df_dataset.columns
+        n_total = len(df_dataset)
+        n_synth = int(df_dataset["origen"].str.contains("Sint", case=False, na=False).sum()) if has_origen else n_total
+        n_real = int(df_dataset["origen"].str.contains("Real", case=False, na=False).sum()) if has_origen else 0
 
-        ds_c1, ds_c2 = st.columns([1.1, 1.4], gap="large")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Consolidado", f"{n_total:,} avisos")
+        m2.metric("Avisos Sintéticos", f"{n_synth:,} ({100.0 * n_synth / n_total:.1f}%)")
+        m3.metric("Avisos Reales Perú", f"{n_real:,} ({100.0 * n_real / n_total:.1f}%)")
+        if metrics_data and "random_forest" in metrics_data.get("models", {}):
+            rf_tm = metrics_data["models"]["random_forest"]["test_metrics"]
+            m4.metric("RF Test (80/20)", f"Acc {rf_tm['accuracy']*100:.1f}% · F1 {rf_tm['f1_macro']*100:.1f}%")
+        else:
+            m4.metric("Categorías", f"{len(ALL_CATEGORIES)} clases")
+
+        st.markdown("")
+        ds_c1, ds_c2 = st.columns([1.25, 1.0], gap="large")
         with ds_c1:
-            fig_dist = px.bar(
-                counts,
-                x="Categoría",
-                y="Cantidad",
-                color="Categoría",
-                text="Cantidad",
-                color_discrete_map={cat: CATEGORY_INFO[cat]["color"] for cat in ALL_CATEGORIES},
-                title="Distribución balanceada por categoría",
-            )
-            fig_dist.update_traces(textposition="outside", textfont=dict(color="#0F172A"))
-            fig_dist.update_layout(showlegend=False, height=340, yaxis=dict(range=[0, counts["Cantidad"].max() + 25]))
+            if has_origen:
+                grouped = (
+                    df_dataset.groupby(["categoria", "origen"], observed=True)
+                    .size()
+                    .reset_index(name="Cantidad")
+                )
+                fig_dist = px.bar(
+                    grouped,
+                    x="categoria",
+                    y="Cantidad",
+                    color="origen",
+                    barmode="stack",
+                    text="Cantidad",
+                    category_orders={"categoria": ALL_CATEGORIES},
+                    color_discrete_map={
+                        "Sintético (1200)": "#2563EB",
+                        "Real Perú (200)": "#0D9488",
+                    },
+                    title="Distribución consolidada por categoría y origen (1,400 avisos)",
+                    labels={"categoria": "Categoría", "origen": "Origen"},
+                )
+                fig_dist.update_traces(textfont=dict(color="#FFFFFF", size=11))
+                fig_dist.update_layout(height=360, legend_title="Origen")
+            else:
+                counts = df_dataset["categoria"].value_counts().reindex(ALL_CATEGORIES).reset_index()
+                counts.columns = ["Categoría", "Cantidad"]
+                fig_dist = px.bar(
+                    counts,
+                    x="Categoría",
+                    y="Cantidad",
+                    color="Categoría",
+                    text="Cantidad",
+                    color_discrete_map={cat: CATEGORY_INFO[cat]["color"] for cat in ALL_CATEGORIES},
+                    title="Distribución por categoría",
+                )
+                fig_dist.update_traces(textposition="outside", textfont=dict(color="#0F172A"))
+                fig_dist.update_layout(showlegend=False, height=360)
             apply_light_plotly_theme(fig_dist)
             st.plotly_chart(fig_dist, theme=None, width="stretch")
 
         with ds_c2:
-            st.markdown("#### Resumen estructural del corpus")
+            st.markdown("#### Resumen estructural del corpus consolidado")
             st.write(
-                f"- **Total de avisos sintéticos:** `{len(df_dataset)}` registros únicos.\n"
-                f"- **Balance exacto:** `{len(df_dataset) // len(ALL_CATEGORIES)}` ejemplos por cada una de las 6 clases.\n"
-                f"- **Cobertura sectorial:** `{df_dataset['sector'].nunique()}` sectores laborales distribuidos equitativamente entre todas las clases para prevenir sesgo temático en TF-IDF.\n"
-                f"- **Idioma:** Español (contexto laboral hispanohablante)."
+                f"- **Total consolidado:** `{n_total:,}` avisos únicos (sin duplicados ni valores nulos).\n"
+                f"- **Bloque Sintético:** `{n_synth:,}` avisos balanceados (`200` por cada una de las 6 categorías).\n"
+                f"- **Bloque Real Perú:** `{n_real:,}` avisos reales anonimizados (`100` de Computrabajo Perú y `100` de Bumeran Perú).\n"
+                "- **Respaldos originales intactos:** `data/dataset_sesgos_empleo.csv` (1,200) y `data/ofertas_reales_peru.csv` (200).\n"
+                "- **Entrenamiento Random Forest:** división estratificada `80% entrenamiento / 20% prueba` (`random_state=42`)."
             )
-            st.download_button(
-                "⬇️ Descargar dataset completo (CSV)",
-                data=read_file_bytes(DATASET_PATH),
-                file_name="dataset_sesgos_empleo.csv",
-                mime="text/csv",
-            )
+            dl1, dl2 = st.columns(2)
+            with dl1:
+                st.download_button(
+                    "⬇️ Descargar CSV (1,400)",
+                    data=read_file_bytes(CONSOLIDATED_DATASET_PATH),
+                    file_name="dataset_consolidado_1400.csv",
+                    mime="text/csv",
+                    width="stretch",
+                )
+            with dl2:
+                st.download_button(
+                    "⬇️ Descargar Excel (.xlsx)",
+                    data=read_file_bytes(CONSOLIDATED_EXCEL_PATH),
+                    file_name="dataset_consolidado_1400.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    width="stretch",
+                )
 
-        st.markdown("#### 🔎 Filtrar y explorar ejemplos")
-        f1, f2, f3 = st.columns([1.2, 1.2, 2.0])
+        st.markdown("#### 🔎 Filtrar y explorar avisos")
+        f1, f2, f3, f4 = st.columns([1.1, 1.4, 1.1, 1.6])
         with f1:
-            cat_filter = st.multiselect("Categoría", options=ALL_CATEGORIES, default=ALL_CATEGORIES)
+            origen_choice = st.selectbox(
+                "Origen",
+                options=["Todos", "Sintético", "Real Perú"],
+                index=0,
+            )
         with f2:
-            sector_options = sorted(df_dataset["sector"].unique().tolist())
-            sector_filter = st.multiselect("Sector", options=sector_options, default=[])
+            cat_filter = st.multiselect("Categoría", options=ALL_CATEGORIES, default=ALL_CATEGORIES)
         with f3:
-            keyword = st.text_input("Buscar palabra clave en el aviso", placeholder="Ej.: Python, edad, señorita, sexo...")
+            portal_opts = ["Todos"] + (sorted(df_dataset["portal"].unique().tolist()) if has_portal else [])
+            portal_choice = st.selectbox("Portal", options=portal_opts, index=0)
+        with f4:
+            keyword = st.text_input(
+                "Buscar palabra clave",
+                placeholder="Ej.: varones, señorita, edad, SAP, Python...",
+            )
 
         filtered = df_dataset[df_dataset["categoria"].isin(cat_filter)]
-        if sector_filter:
-            filtered = filtered[filtered["sector"].isin(sector_filter)]
+        if has_origen and origen_choice == "Sintético":
+            filtered = filtered[filtered["origen"].str.contains("Sint", case=False, na=False)]
+        elif has_origen and origen_choice == "Real Perú":
+            filtered = filtered[filtered["origen"].str.contains("Real", case=False, na=False)]
+        if has_portal and portal_choice != "Todos":
+            filtered = filtered[filtered["portal"] == portal_choice]
         if keyword.strip():
-            filtered = filtered[filtered["texto"].str.contains(keyword.strip(), case=False, na=False)]
+            kw = keyword.strip()
+            mask = (
+                filtered["texto"].str.contains(kw, case=False, na=False)
+                | filtered["puesto"].str.contains(kw, case=False, na=False)
+                | (
+                    filtered["frases_detectadas"].str.contains(kw, case=False, na=False)
+                    if "frases_detectadas" in filtered.columns
+                    else False
+                )
+            )
+            filtered = filtered[mask]
 
-        st.caption(f"Mostrando {len(filtered)} de {len(df_dataset)} avisos.")
-        st.dataframe(filtered, width="stretch", hide_index=True, height=400)
+        st.caption(f"Mostrando **{len(filtered):,}** de **{n_total:,}** avisos.")
+        st.dataframe(filtered, width="stretch", hide_index=True, height=440)

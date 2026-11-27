@@ -1,19 +1,7 @@
 ﻿model_key,modelo,categoria,precision,recall,f1_score,support
-random_forest,Random Forest,Masculino,0.975,0.9512,0.963,41
-random_forest,Random Forest,Femenino,0.9512,0.975,0.963,40
-random_forest,Random Forest,Excluyente,0.8605,0.9487,0.9024,39
-random_forest,Random Forest,LGBTQ+,0.95,0.95,0.95,40
-random_forest,Random Forest,Demográfico,0.9459,0.875,0.9091,40
-random_forest,Random Forest,Neutro,1.0,0.975,0.9873,40
-svm,SVM,Masculino,0.9512,0.9512,0.9512,41
-svm,SVM,Femenino,0.9744,0.95,0.962,40
-svm,SVM,Excluyente,0.8684,0.8462,0.8571,39
-svm,SVM,LGBTQ+,0.9744,0.95,0.962,40
-svm,SVM,Demográfico,0.8636,0.95,0.9048,40
-svm,SVM,Neutro,1.0,0.975,0.9873,40
-decision_tree,Decision Tree,Masculino,0.925,0.9024,0.9136,41
-decision_tree,Decision Tree,Femenino,0.95,0.95,0.95,40
-decision_tree,Decision Tree,Excluyente,0.7872,0.9487,0.8605,39
-decision_tree,Decision Tree,LGBTQ+,1.0,0.95,0.9744,40
-decision_tree,Decision Tree,Demográfico,0.9189,0.85,0.8831,40
-decision_tree,Decision Tree,Neutro,1.0,0.95,0.9744,40
+random_forest,Random Forest,Masculino,0.9677,0.6818,0.8,44
+random_forest,Random Forest,Femenino,0.9556,0.8269,0.8866,52
+random_forest,Random Forest,Excluyente,0.8298,0.9512,0.8864,41
+random_forest,Random Forest,LGBTQ+,1.0,0.95,0.9744,40
+random_forest,Random Forest,Demográfico,0.86,0.8958,0.8776,48
+random_forest,Random Forest,Neutro,0.7826,0.9818,0.871,55

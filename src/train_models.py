@@ -1,14 +1,12 @@
-"""Entrenamiento y evaluación comparativa de 3 clasificadores ML con TF-IDF.
+"""Entrenamiento offline de Random Forest ligero y comprimido para Streamlit Cloud.
 
-Modelos entrenados (Versión 3):
-1. Random Forest (RandomForestClassifier)
-2. SVM (CalibratedClassifierCV + SVC)
-3. Decision Tree (DecisionTreeClassifier)
+Entrena el clasificador sobre data/dataset_consolidado_1400.csv con división estratificada 80/20
+(stratify=categoria, random_state=42), optimizado para bajo consumo de RAM:
+- TfidfVectorizer: max_features=3000, ngram_range=(1, 2), dtype=float32
+- RandomForestClassifier: n_estimators=100, max_depth=25, min_samples_leaf=2
+- Exportación comprimida: joblib.dump(modelo, "models/rf_model.joblib", compress=3)
 
-Guarda:
-- Pipelines serializados en models/*.joblib
-- Métricas exactas (Accuracy, Precision, Recall, F1-Score, Matriz de Confusión y CV-5)
-  en reports/model_metrics.json y archivos CSV en reports/*.csv.
+Este script se ejecuta únicamente offline; app.py NUNCA entrena el modelo al iniciar.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ from typing import Any, Dict, List
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import (
@@ -33,13 +30,12 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.svm import SVC
-from sklearn.tree import DecisionTreeClassifier
 
 from src.config import (
     ALL_CATEGORIES,
     BEST_MODEL_META_PATH,
     CONFUSION_CSV_PATH,
+    CONSOLIDATED_DATASET_PATH,
     DATASET_PATH,
     METRICS_JSON_PATH,
     METRICS_SUMMARY_CSV_PATH,
@@ -47,8 +43,8 @@ from src.config import (
     MODELS_DIR,
     PER_CLASS_CSV_PATH,
     REPORTS_DIR,
+    RF_MODEL_PATH,
 )
-from src.generate_dataset import generate_balanced_dataset
 from src.text_utils import SPANISH_MINIMAL_STOPWORDS, normalize_for_ml
 
 RANDOM_SEED = 42
@@ -56,7 +52,7 @@ TEST_SIZE = 0.20
 
 
 def build_tfidf() -> TfidfVectorizer:
-    """Crea el vectorizador TF-IDF adaptado para texto en español con señales de sesgo."""
+    """Crea el vectorizador TF-IDF ligero (max_features=3000, float32) para español."""
     return TfidfVectorizer(
         preprocessor=normalize_for_ml,
         stop_words=SPANISH_MINIMAL_STOPWORDS,
@@ -64,12 +60,13 @@ def build_tfidf() -> TfidfVectorizer:
         min_df=3,
         max_df=0.90,
         sublinear_tf=True,
-        max_features=4500,
+        max_features=3000,
+        dtype=np.float32,
     )
 
 
 def build_model_pipelines() -> Dict[str, Pipeline]:
-    """Construye los 3 pipelines TF-IDF + clasificador (Random Forest, SVM y Decision Tree)."""
+    """Construye el pipeline TF-IDF + Random Forest optimizado para bajo consumo de memoria."""
     return {
         "random_forest": Pipeline(
             [
@@ -77,9 +74,9 @@ def build_model_pipelines() -> Dict[str, Pipeline]:
                 (
                     "clf",
                     RandomForestClassifier(
-                        n_estimators=500,
-                        max_depth=None,
-                        min_samples_leaf=1,
+                        n_estimators=100,
+                        max_depth=25,
+                        min_samples_leaf=2,
                         max_features="sqrt",
                         class_weight="balanced",
                         random_state=RANDOM_SEED,
@@ -88,92 +85,54 @@ def build_model_pipelines() -> Dict[str, Pipeline]:
                 ),
             ]
         ),
-        "svm": Pipeline(
-            [
-                ("tfidf", build_tfidf()),
-                (
-                    "clf",
-                    CalibratedClassifierCV(
-                        estimator=SVC(
-                            kernel="rbf",
-                            C=0.62,
-                            gamma="scale",
-                            class_weight="balanced",
-                            random_state=RANDOM_SEED,
-                        ),
-                        cv=3,
-                        method="sigmoid",
-                        ensemble=False,
-                    ),
-                ),
-            ]
-        ),
-        "decision_tree": Pipeline(
-            [
-                ("tfidf", build_tfidf()),
-                (
-                    "clf",
-                    DecisionTreeClassifier(
-                        criterion="gini",
-                        max_depth=20,
-                        min_samples_split=4,
-                        min_samples_leaf=2,
-                        class_weight="balanced",
-                        random_state=RANDOM_SEED,
-                    ),
-                ),
-            ]
-        ),
     }
 
 
 def train_and_evaluate(regenerate_dataset: bool = False) -> Dict[str, Any]:
-    """Entrena los 3 modelos, evalúa métricas exactas y exporta artefactos JSON/CSV y modelos."""
-    if regenerate_dataset or not DATASET_PATH.exists():
-        df = generate_balanced_dataset()
-    else:
-        df = pd.read_csv(DATASET_PATH)
+    """Entrena Random Forest ligero sobre dataset_consolidado_1400.csv (80/20 estratificado)."""
+    source_path = CONSOLIDATED_DATASET_PATH if CONSOLIDATED_DATASET_PATH.exists() else DATASET_PATH
+    df = pd.read_csv(source_path)
 
     X = df["texto"].astype(str)
     y = df["categoria"].astype(str)
-    stratify_key = (
-        df["categoria"].astype(str) + "__" + df["nivel_sesgo"].astype(str)
-        if "nivel_sesgo" in df.columns
-        else y
-    )
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
         test_size=TEST_SIZE,
-        stratify=stratify_key,
+        stratify=y,
         random_state=RANDOM_SEED,
     )
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Limpiar posibles modelos legados que ya no forman parte del pipeline
-    legacy_lr = MODELS_DIR / "logistic_regression.joblib"
-    if legacy_lr.exists():
-        legacy_lr.unlink()
+    # Limpiar modelos legados/pesados que ya no se usan en producción
+    for legacy_name in ("random_forest.joblib", "svm.joblib", "decision_tree.joblib", "logistic_regression.joblib"):
+        legacy_path = MODELS_DIR / legacy_name
+        if legacy_path.exists():
+            legacy_path.unlink()
 
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_SEED)
     pipelines = build_model_pipelines()
 
+    origin_counts = (
+        df["origen"].value_counts().to_dict() if "origen" in df.columns else {"Sintético": int(len(df))}
+    )
+
     metrics_payload: Dict[str, Any] = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "dataset": {
-            "path": str(DATASET_PATH.name),
+            "path": str(source_path.name),
             "total_samples": int(len(df)),
             "train_samples": int(len(X_train)),
             "test_samples": int(len(X_test)),
             "test_size_ratio": TEST_SIZE,
             "random_seed": RANDOM_SEED,
+            "stratified_by": "categoria",
             "classes": ALL_CATEGORIES,
-            "class_distribution": {
-                cat: int((y == cat).sum()) for cat in ALL_CATEGORIES
-            },
+            "class_distribution": {cat: int((y == cat).sum()) for cat in ALL_CATEGORIES},
+            "origin_distribution": {str(k): int(v) for k, v in origin_counts.items()},
         },
         "vectorizer": {
             "type": "TfidfVectorizer",
@@ -181,7 +140,8 @@ def train_and_evaluate(regenerate_dataset: bool = False) -> Dict[str, Any]:
             "min_df": 3,
             "max_df": 0.90,
             "sublinear_tf": True,
-            "max_features": 4500,
+            "max_features": 3000,
+            "dtype": "float32",
         },
         "models": {},
     }
@@ -190,13 +150,9 @@ def train_and_evaluate(regenerate_dataset: bool = False) -> Dict[str, Any]:
     per_class_rows: List[Dict[str, Any]] = []
     confusion_rows: List[Dict[str, Any]] = []
 
-    best_model_key = None
-    best_score = -1.0
-
     for model_key, pipeline in pipelines.items():
         display_name = MODEL_DISPLAY_NAMES[model_key]
 
-        # Validación cruzada 5-fold sobre el conjunto de entrenamiento
         cv_results = cross_validate(
             pipeline,
             X_train,
@@ -211,9 +167,11 @@ def train_and_evaluate(regenerate_dataset: bool = False) -> Dict[str, Any]:
             n_jobs=-1,
         )
 
-        # Entrenamiento final en train split y evaluación en test split
         pipeline.fit(X_train, y_train)
         y_pred = pipeline.predict(X_test)
+
+        # En inferencia en Streamlit Cloud usar un solo hilo evita picos de RAM por workers joblib
+        pipeline.named_steps["clf"].n_jobs = 1
 
         acc = float(accuracy_score(y_test, y_pred))
         prec_macro = float(precision_score(y_test, y_pred, average="macro", zero_division=0))
@@ -268,8 +226,22 @@ def train_and_evaluate(regenerate_dataset: bool = False) -> Dict[str, Any]:
         cv_f1_mean = float(np.mean(cv_results["test_f1_macro"]))
         cv_f1_std = float(np.std(cv_results["test_f1_macro"]))
 
+        # Guardar modelo comprimido en models/rf_model.joblib
+        joblib.dump(pipeline, RF_MODEL_PATH, compress=3)
+        size_mb = round(RF_MODEL_PATH.stat().st_size / (1024 * 1024), 3)
+
         metrics_payload["models"][model_key] = {
             "display_name": display_name,
+            "model_file": "models/rf_model.joblib",
+            "model_size_mb": size_mb,
+            "hyperparameters": {
+                "n_estimators": 100,
+                "max_depth": 25,
+                "min_samples_leaf": 2,
+                "max_features": "sqrt",
+                "class_weight": "balanced",
+                "compress": 3,
+            },
             "test_metrics": {
                 "accuracy": round(acc, 4),
                 "precision_macro": round(prec_macro, 4),
@@ -309,18 +281,11 @@ def train_and_evaluate(regenerate_dataset: bool = False) -> Dict[str, Any]:
             }
         )
 
-        model_path = MODELS_DIR / f"{model_key}.joblib"
-        joblib.dump(pipeline, model_path)
-
-        composite_score = f1_macro + 0.001 * cv_f1_mean
-        if composite_score > best_score:
-            best_score = composite_score
-            best_model_key = model_key
-
     metrics_payload["best_model"] = {
-        "model_key": best_model_key,
-        "display_name": MODEL_DISPLAY_NAMES[best_model_key],
-        "selection_criterion": "f1_macro (test set)",
+        "model_key": "random_forest",
+        "display_name": MODEL_DISPLAY_NAMES["random_forest"],
+        "model_file": "models/rf_model.joblib",
+        "selection_criterion": "f1_macro (test set 20% estratificado)",
     }
 
     with open(METRICS_JSON_PATH, "w", encoding="utf-8") as f:
@@ -338,17 +303,16 @@ def train_and_evaluate(regenerate_dataset: bool = False) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     results = train_and_evaluate(regenerate_dataset=False)
-    print("=== Resultados de Evaluación (Test Set 20%) ===")
-    for key, info in results["models"].items():
-        tm = info["test_metrics"]
-        cv_m = info["cv_5fold_train"]
-        print(
-            f"- {info['display_name']:18s} | "
-            f"Acc: {tm['accuracy']:.4f} | "
-            f"Prec: {tm['precision_macro']:.4f} | "
-            f"Rec: {tm['recall_macro']:.4f} | "
-            f"F1: {tm['f1_macro']:.4f} | "
-            f"CV5-F1: {cv_m['f1_macro_mean']:.4f} (±{cv_m['f1_macro_std']:.4f})"
-        )
-    print(f"\nMejor modelo: {results['best_model']['display_name']}")
-    print(f"Reportes guardados en: {REPORTS_DIR}")
+    info = results["models"]["random_forest"]
+    tm = info["test_metrics"]
+    cv_m = info["cv_5fold_train"]
+    print("=== Random Forest Ligero y Comprimido (Test Set 20%) ===")
+    print(
+        f"- Archivo: {info['model_file']} ({info['model_size_mb']:.3f} MB) | "
+        f"Acc: {tm['accuracy']:.4f} | "
+        f"Prec: {tm['precision_macro']:.4f} | "
+        f"Rec: {tm['recall_macro']:.4f} | "
+        f"F1-Macro: {tm['f1_macro']:.4f} | "
+        f"F1-Weighted: {tm['f1_weighted']:.4f} | "
+        f"CV5-F1: {cv_m['f1_macro_mean']:.4f} (±{cv_m['f1_macro_std']:.4f})"
+    )
