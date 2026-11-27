@@ -1,4 +1,4 @@
-"""Pruebas automatizadas del pipeline consolidado (1,400 avisos + Random Forest + reglas peruanas)."""
+"""Pruebas automatizadas del pipeline maestro (2,000 avisos = 1,200 sintéticos + 800 reales + RF ligero)."""
 
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ from src.config import (
     BASE_DIR,
     BIAS_CATEGORIES,
     CONFUSION_CSV_PATH,
-    CONSOLIDATED_DATASET_PATH,
-    CONSOLIDATED_EXCEL_PATH,
+    CONSOLIDATED_2000_EXCEL_PATH,
+    CONSOLIDATED_2000_PATH,
+    DATA_DIR,
     DATASET_PATH,
     METRICS_JSON_PATH,
     METRICS_SUMMARY_CSV_PATH,
@@ -52,48 +53,63 @@ def run_all_tests() -> None:
     assert "st.tabs" not in app_source, "app.py debe mostrar únicamente el analizador sin pestañas"
     assert "Modelo activo:" not in app_source, "app.py no debe mostrar 'Modelo activo:'"
 
-    # 2. Validar respaldos intactos (1,200 sintéticos y 200 reales) y dataset consolidado (1,400)
+    # 2. Validar respaldos intactos (1,200 sintéticos, 200 reales backup), 800 reales y maestro 2,000
     df_synth = pd.read_csv(DATASET_PATH)
+    df_real_backup = pd.read_csv(DATA_DIR / "ofertas_reales_peru_200_backup.csv")
     df_real = pd.read_csv(REAL_PERU_DATASET_PATH)
-    df_1400 = pd.read_csv(CONSOLIDATED_DATASET_PATH)
+    df_2000 = pd.read_csv(CONSOLIDATED_2000_PATH)
 
     assert len(df_synth) == 1200, f"Respaldo sintético alterado: {len(df_synth)}"
-    assert len(df_real) == 200, f"Respaldo real Perú alterado: {len(df_real)}"
-    assert len(df_1400) == 1400, f"Dataset consolidado esperado 1400: {len(df_1400)}"
-    assert CONSOLIDATED_EXCEL_PATH.exists(), f"Falta respaldo Excel: {CONSOLIDATED_EXCEL_PATH}"
+    assert len(df_real_backup) == 200, f"Respaldo real 200 alterado: {len(df_real_backup)}"
+    assert len(df_real) == 800, f"Muestra real Perú esperada 800: {len(df_real)}"
+    assert df_real["portal"].value_counts().to_dict() == {
+        "Computrabajo Perú": 300,
+        "Bumeran Perú": 300,
+        "LinkedIn Perú": 200,
+    }, f"Distribución de portales inesperada: {df_real['portal'].value_counts().to_dict()}"
+    assert int(df_real.isna().sum().sum()) == 0, "Existen valores nulos en ofertas_reales_peru.csv"
+    assert df_real["texto"].nunique() == 800, "Existen textos duplicados en ofertas_reales_peru.csv"
+
+    assert len(df_2000) == 2000, f"Dataset maestro esperado 2000: {len(df_2000)}"
+    assert CONSOLIDATED_2000_EXCEL_PATH.exists(), f"Falta respaldo Excel: {CONSOLIDATED_2000_EXCEL_PATH}"
+    assert (BASE_DIR / "auditoria_800.html").exists(), "Falta auditoria_800.html"
+    assert not (BASE_DIR / "auditoria_200.html").exists(), "auditoria_200.html debió ser renombrado a auditoria_800.html"
 
     req_cols = {"id", "origen", "portal", "puesto", "categoria", "nivel_riesgo", "frases_detectadas", "texto"}
-    assert req_cols.issubset(set(df_1400.columns)), f"Faltan columnas en 1400: {req_cols - set(df_1400.columns)}"
-    assert int(df_1400.isna().sum().sum()) == 0, "Existen valores nulos en dataset_consolidado_1400.csv"
-    assert df_1400["texto"].nunique() == 1400, "Existen textos duplicados en dataset_consolidado_1400.csv"
-    assert set(df_1400["origen"].unique()) == {"Sintético (1200)", "Real Perú (200)"}
+    assert req_cols.issubset(set(df_2000.columns)), f"Faltan columnas en 2000: {req_cols - set(df_2000.columns)}"
+    assert int(df_2000.isna().sum().sum()) == 0, "Existen valores nulos en dataset_consolidado_2000.csv"
+    assert df_2000["texto"].nunique() == 2000, "Existen textos duplicados en dataset_consolidado_2000.csv"
+    assert set(df_2000["origen"].unique()) == {"Sintético (1200)", "Real Perú (800)"}
 
-    # 3. Validar métricas Random Forest guardadas sobre 1,400 (split estratificado 80/20)
+    # 3. Validar métricas Random Forest guardadas sobre 2,000 (split estratificado 80/20)
     for path in [METRICS_JSON_PATH, METRICS_SUMMARY_CSV_PATH, PER_CLASS_CSV_PATH, CONFUSION_CSV_PATH]:
         assert path.exists(), f"Falta archivo de reporte: {path}"
 
     with open(METRICS_JSON_PATH, "r", encoding="utf-8") as f:
         metrics = json.load(f)
 
-    assert metrics["dataset"]["total_samples"] == 1400
-    assert metrics["dataset"]["train_samples"] == 1120
-    assert metrics["dataset"]["test_samples"] == 280
+    assert metrics["dataset"]["total_samples"] == 2000
+    assert metrics["dataset"]["train_samples"] == 1600
+    assert metrics["dataset"]["test_samples"] == 400
     assert metrics["best_model"]["model_key"] == "random_forest"
 
     rf_tm = metrics["models"]["random_forest"]["test_metrics"]
-    assert 0.85 <= rf_tm["accuracy"] <= 0.97, f"Accuracy inesperada: {rf_tm['accuracy']}"
-    assert 0.85 <= rf_tm["f1_macro"] <= 0.97, f"F1-Macro inesperado: {rf_tm['f1_macro']}"
+    assert 0.85 <= rf_tm["accuracy"] <= 0.98, f"Accuracy inesperada: {rf_tm['accuracy']}"
+    assert 0.85 <= rf_tm["f1_macro"] <= 0.98, f"F1-Macro inesperado: {rf_tm['f1_macro']}"
 
-    # 4. Verificar nuevas reglas de limpieza: masculino genérico neutro y restricciones de hombres -> Masculino
+    # 4. Verificar reglas limpias: masculino genérico/salarial/EEO neutro; hombres -> Masculino; solo peruanos -> Excluyente
     neutral_generic_cases = [
         "Buscamos un analista de sistemas con experiencia en SQL y Python.",
         "Se requiere un ejecutivo comercial para atención de cartera B2B.",
         "Estamos en búsqueda de un vendedor con orientación al cliente.",
         "Necesitamos un arquitecto de software con experiencia en AWS y Docker.",
+        "Operarios de Producción / Sin experiencia / varones/mujeres.",
+        "Personal femenino y masculino para almacén con sueldo base competitivo y precios competitivos.",
+        "Creemos en la diversidad en su sentido más amplio: identidad de género, expresión de género, orientación sexual, edad, embarazo y estado civil.",
     ]
     for ad in neutral_generic_cases:
         spans = detect_biased_spans(ad)
-        assert len(spans) == 0, f"Masculino genérico NO debe marcarse como sesgo: {[(s.text, s.category) for s in spans]} | {ad}"
+        assert len(spans) == 0, f"Caso neutro NO debe marcarse como sesgo: {[(s.text, s.category) for s in spans]} | {ad}"
 
     male_explicit_cases = [
         ("Operarios de almacén / Varones - VES", "/ Varones"),
@@ -109,6 +125,9 @@ def run_all_tests() -> None:
         assert any(s.category == "Masculino" and expected_phrase.lower() in s.text.lower() for s in spans), (
             f"Esperado Masculino/'{expected_phrase}', obtenido: {[(s.text, s.category) for s in spans]} | {ad}"
         )
+
+    excl_nat_spans = detect_biased_spans("Requisitos: solo peruanos con experiencia en logística.")
+    assert any(s.category == "Excluyente" for s in excl_nat_spans), f"Esperado Excluyente en 'solo peruanos': {excl_nat_spans}"
 
     # 5. Validar 6 ejemplos [Real Perú] + 1 único [Caso de prueba] LGBTQ+ en PRELOADED_EXAMPLES
     real_examples = [k for k in PRELOADED_EXAMPLES if k.startswith("[Real Perú]")]
@@ -194,9 +213,9 @@ def run_all_tests() -> None:
         assert redundant not in extracted_lower, f"Sub-término redundante '{redundant}' en {extracted}"
 
     print(
-        f"TODAS LAS PRUEBAS PASARON EXITOSAMENTE | 1400 consolidado (1200+200) | "
+        f"TODAS LAS PRUEBAS PASARON EXITOSAMENTE | 2000 maestro (1200+800) | "
         f"RF Acc={rf_tm['accuracy']:.4f}, F1-Macro={rf_tm['f1_macro']:.4f} | "
-        f"Ejemplos [Real Perú]={len(real_examples)}"
+        f"RF size={model_size_mb:.3f} MB | Ejemplos [Real Perú]={len(real_examples)}"
     )
 
 

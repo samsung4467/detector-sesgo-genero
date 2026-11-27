@@ -1,7 +1,7 @@
 ﻿model_key,modelo,clase_real,pred_Masculino,pred_Femenino,pred_Excluyente,pred_LGBTQ+,pred_Demográfico,pred_Neutro
-random_forest,Random Forest,Masculino,30,1,5,0,4,4
-random_forest,Random Forest,Femenino,0,43,1,0,2,6
-random_forest,Random Forest,Excluyente,0,0,39,0,1,1
-random_forest,Random Forest,LGBTQ+,0,1,1,38,0,0
-random_forest,Random Forest,Demográfico,1,0,0,0,43,4
-random_forest,Random Forest,Neutro,0,0,1,0,0,54
+random_forest,Random Forest,Masculino,35,0,2,0,6,4
+random_forest,Random Forest,Femenino,0,46,4,0,1,14
+random_forest,Random Forest,Excluyente,2,0,36,0,1,1
+random_forest,Random Forest,LGBTQ+,0,0,1,39,0,0
+random_forest,Random Forest,Demográfico,2,1,0,0,55,3
+random_forest,Random Forest,Neutro,1,1,1,2,6,136

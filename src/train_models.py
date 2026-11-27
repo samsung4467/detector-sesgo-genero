@@ -35,6 +35,7 @@ from src.config import (
     ALL_CATEGORIES,
     BEST_MODEL_META_PATH,
     CONFUSION_CSV_PATH,
+    CONSOLIDATED_2000_PATH,
     CONSOLIDATED_DATASET_PATH,
     DATASET_PATH,
     METRICS_JSON_PATH,
@@ -89,8 +90,13 @@ def build_model_pipelines() -> Dict[str, Pipeline]:
 
 
 def train_and_evaluate(regenerate_dataset: bool = False) -> Dict[str, Any]:
-    """Entrena Random Forest ligero sobre dataset_consolidado_1400.csv (80/20 estratificado)."""
-    source_path = CONSOLIDATED_DATASET_PATH if CONSOLIDATED_DATASET_PATH.exists() else DATASET_PATH
+    """Entrena Random Forest ligero sobre dataset_consolidado_2000.csv (80/20 estratificado)."""
+    if CONSOLIDATED_2000_PATH.exists():
+        source_path = CONSOLIDATED_2000_PATH
+    elif CONSOLIDATED_DATASET_PATH.exists():
+        source_path = CONSOLIDATED_DATASET_PATH
+    else:
+        source_path = DATASET_PATH
     df = pd.read_csv(source_path)
 
     X = df["texto"].astype(str)

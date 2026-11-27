@@ -1,7 +1,7 @@
 ﻿model_key,modelo,categoria,precision,recall,f1_score,support
-random_forest,Random Forest,Masculino,0.9677,0.6818,0.8,44
-random_forest,Random Forest,Femenino,0.9556,0.8269,0.8866,52
-random_forest,Random Forest,Excluyente,0.8298,0.9512,0.8864,41
-random_forest,Random Forest,LGBTQ+,1.0,0.95,0.9744,40
-random_forest,Random Forest,Demográfico,0.86,0.8958,0.8776,48
-random_forest,Random Forest,Neutro,0.7826,0.9818,0.871,55
+random_forest,Random Forest,Masculino,0.875,0.7447,0.8046,47
+random_forest,Random Forest,Femenino,0.9583,0.7077,0.8142,65
+random_forest,Random Forest,Excluyente,0.8182,0.9,0.8571,40
+random_forest,Random Forest,LGBTQ+,0.9512,0.975,0.963,40
+random_forest,Random Forest,Demográfico,0.7971,0.9016,0.8462,61
+random_forest,Random Forest,Neutro,0.8608,0.9252,0.8918,147

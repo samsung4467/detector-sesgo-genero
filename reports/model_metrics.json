@@ -1,10 +1,10 @@
 {
-  "generated_at_utc": "2026-11-27T00:05:47.465653+00:00",
+  "generated_at_utc": "2026-11-27T03:40:09.302094+00:00",
   "dataset": {
-    "path": "dataset_consolidado_1400.csv",
-    "total_samples": 1400,
-    "train_samples": 1120,
-    "test_samples": 280,
+    "path": "dataset_consolidado_2000.csv",
+    "total_samples": 2000,
+    "train_samples": 1600,
+    "test_samples": 400,
     "test_size_ratio": 0.2,
     "random_seed": 42,
     "stratified_by": "categoria",
@@ -17,16 +17,16 @@
       "Neutro"
     ],
     "class_distribution": {
-      "Masculino": 220,
-      "Femenino": 261,
-      "Excluyente": 203,
+      "Masculino": 237,
+      "Femenino": 324,
+      "Excluyente": 202,
       "LGBTQ+": 200,
-      "Demográfico": 239,
-      "Neutro": 277
+      "Demográfico": 303,
+      "Neutro": 734
     },
     "origin_distribution": {
       "Sintético (1200)": 1200,
-      "Real Perú (200)": 200
+      "Real Perú (800)": 800
     }
   },
   "vectorizer": {
@@ -45,7 +45,7 @@
     "random_forest": {
       "display_name": "Random Forest",
       "model_file": "models/rf_model.joblib",
-      "model_size_mb": 0.658,
+      "model_size_mb": 0.967,
       "hyperparameters": {
         "n_estimators": 100,
         "max_depth": 25,
@@ -55,56 +55,56 @@
         "compress": 3
       },
       "test_metrics": {
-        "accuracy": 0.8821,
-        "precision_macro": 0.8993,
-        "recall_macro": 0.8813,
-        "f1_macro": 0.8826,
-        "precision_weighted": 0.8951,
-        "recall_weighted": 0.8821,
-        "f1_weighted": 0.8809
+        "accuracy": 0.8675,
+        "precision_macro": 0.8768,
+        "recall_macro": 0.859,
+        "f1_macro": 0.8628,
+        "precision_weighted": 0.8734,
+        "recall_weighted": 0.8675,
+        "f1_weighted": 0.8656
       },
       "cv_5fold_train": {
-        "accuracy_mean": 0.9054,
-        "accuracy_std": 0.0087,
-        "f1_macro_mean": 0.9065,
-        "f1_macro_std": 0.0083
+        "accuracy_mean": 0.875,
+        "accuracy_std": 0.0224,
+        "f1_macro_mean": 0.8689,
+        "f1_macro_std": 0.0218
       },
       "per_class": {
         "Masculino": {
-          "precision": 0.9677,
-          "recall": 0.6818,
-          "f1_score": 0.8,
-          "support": 44
+          "precision": 0.875,
+          "recall": 0.7447,
+          "f1_score": 0.8046,
+          "support": 47
         },
         "Femenino": {
-          "precision": 0.9556,
-          "recall": 0.8269,
-          "f1_score": 0.8866,
-          "support": 52
+          "precision": 0.9583,
+          "recall": 0.7077,
+          "f1_score": 0.8142,
+          "support": 65
         },
         "Excluyente": {
-          "precision": 0.8298,
-          "recall": 0.9512,
-          "f1_score": 0.8864,
-          "support": 41
+          "precision": 0.8182,
+          "recall": 0.9,
+          "f1_score": 0.8571,
+          "support": 40
         },
         "LGBTQ+": {
-          "precision": 1.0,
-          "recall": 0.95,
-          "f1_score": 0.9744,
+          "precision": 0.9512,
+          "recall": 0.975,
+          "f1_score": 0.963,
           "support": 40
         },
         "Demográfico": {
-          "precision": 0.86,
-          "recall": 0.8958,
-          "f1_score": 0.8776,
-          "support": 48
+          "precision": 0.7971,
+          "recall": 0.9016,
+          "f1_score": 0.8462,
+          "support": 61
         },
         "Neutro": {
-          "precision": 0.7826,
-          "recall": 0.9818,
-          "f1_score": 0.871,
-          "support": 55
+          "precision": 0.8608,
+          "recall": 0.9252,
+          "f1_score": 0.8918,
+          "support": 147
         }
       },
       "confusion_matrix": {
@@ -118,52 +118,52 @@
         ],
         "matrix": [
           [
-            30,
-            1,
-            5,
+            35,
             0,
-            4,
+            2,
+            0,
+            6,
             4
           ],
           [
             0,
-            43,
-            1,
+            46,
+            4,
             0,
-            2,
-            6
+            1,
+            14
           ],
           [
+            2,
             0,
-            0,
-            39,
+            36,
             0,
             1,
             1
           ],
           [
             0,
+            0,
             1,
-            1,
-            38,
+            39,
             0,
             0
           ],
           [
+            2,
             1,
             0,
             0,
-            0,
-            43,
-            4
+            55,
+            3
           ],
           [
-            0,
-            0,
             1,
-            0,
-            0,
-            54
+            1,
+            1,
+            2,
+            6,
+            136
           ]
         ]
       }

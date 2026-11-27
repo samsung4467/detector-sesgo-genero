@@ -1,2 +1,2 @@
 ﻿model_key,modelo,accuracy,precision_macro,recall_macro,f1_macro,precision_weighted,recall_weighted,f1_weighted,cv5_accuracy_mean,cv5_f1_macro_mean,cv5_f1_macro_std
-random_forest,Random Forest,0.8821,0.8993,0.8813,0.8826,0.8951,0.8821,0.8809,0.9054,0.9065,0.0083
+random_forest,Random Forest,0.8675,0.8768,0.859,0.8628,0.8734,0.8675,0.8656,0.875,0.8689,0.0218

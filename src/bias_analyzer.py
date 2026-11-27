@@ -76,12 +76,19 @@ class AnalysisResult:
 # evita falsos positivos al mencionar palabras sensibles dentro de cláusulas de inclusión
 # (ej. "no discriminamos por embarazo ni expresión de género", "abierto a personas no binarias").
 _INCLUSIVE_CONTEXT_RE = re.compile(
-    r"\b(?:sin\s+distincion|sin\s+importar|sin\s+discriminacion|libre\s+de\s+discriminacion|"
-    r"cero\s+discriminacion|no\s+discrimin\w*|prohibe\s+cualquier\s+discriminacion|"
-    r"independientemente\s+de|igualdad\s+de\s+oportunidades|sin\s+restriccion(?:es)?\s+(?:de|por)|"
+    r"\b(?:sin\s+distincion(?:es)?|sin\s+importar|sin\s+discriminacion|"
+    r"libre\s+de\s+(?:cualquier\s+|toda\s+)?discriminacion|"
+    r"cero\s+discriminacion|no\s+discrimin\w*|no\s+distinguimos|"
+    r"prohibe\s+cualquier\s+discriminacion|independientemente\s+de|"
+    r"igualdad\s+de\s+oportunidades|empleador\s+de\s+igualdad|"
+    r"sin\s+restriccion(?:es)?\s+(?:de|por)|"
     r"respet\w*\s+(?:plenamente\s+)?(?:la|el|su|todas|toda)|incluyendo\s+personas|"
     r"bienvenid[oa]s\s+personas|abiert[oa]\s+a\s+[^.;\n]{0,40}|proceso\s+inclusivo|"
-    r"entorno\s+(?:laboral\s+)?diverso)\b",
+    r"entorno\s+(?:laboral\s+)?diverso|"
+    r"(?:creemos\s+en|impulsamos|fomentamos|promovemos|valoramos|comprometid[oa]s\s+con)\s+(?:la\s+)?diversidad|"
+    r"diversidad\s+e\s+inclusion|inclusion\s+y\s+diversidad|"
+    r"caracteristica\s+protegida\s+por\s+la\s+ley|"
+    r"cualquier\s+otra\s+(?:circunstancia|condicion)\s+personal)\b",
     flags=re.IGNORECASE,
 )
 
@@ -165,9 +172,15 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
         "Penaliza a personas con tareas de cuidado o responsabilidades familiares.",
         "Especificar objetivamente los horarios o disponibilidad requerida por el puesto.",
     ),
+    (
+        r"\b(?:solo|solamente|unicamente|exclusivamente)\s+(?:peruan[oa]s?|nacionalidad\s+peruana)\b|\bnacionalidad\s+peruana\s+(?:excluyente|indispensable|obligatoria)\b|\bindispensable\s+ser\s+peruan[oa]\b",
+        "Excluyente",
+        "Excluye explícitamente a personas postulantes por su nacionalidad ('solo peruanos').",
+        "Sustituir por 'contar con autorización legal vigente para trabajar en Perú'.",
+    ),
     # Títulos con género femenino exclusivo ("recepcionista mujer", "(Mujer)", "- Mujer", "MUJERES")
     (
-        r"\b(?:recepcionista|ingenier[oa]|abogad[oa]|asistente|secretari[oa]|vendedor[a]?|ejecutiv[oa]|gerent[ea]|supervisor[a]?|coordinador[a]?|analista|desarrollador[a]?|programador[a]?|tecnic[oa]|operari[oa]|auxiliar|contador[a]?|arquitect[oa]|auditor[a]?|chofer|conductor[a]?|jefe|jefa|encargad[oa]|especialista|profesional|administrativ[oa]|cajer[oa]|meser[oa]|camarer[oa]|personal|candidat[oa]|postulante|disenador[a]?|medico|medica|enfermer[oa]|docente|profesor[a]?)(?:\s+de\s+\w+){0,2}\s+(?:mujer|mujeres|femenin[oa]|dama|damas)\b",
+        r"\b(?:recepcionista|ingenier[oa]|abogad[oa]|asistente|secretari[oa]|vendedor[a]?|ejecutiv[oa]|gerent[ea]|supervisor[a]?|coordinador[a]?|analista|desarrollador[a]?|programador[a]?|tecnic[oa]|operari[oa]|auxiliar|contador[a]?|arquitect[oa]|auditor[a]?|chofer|conductor[a]?|jefe|jefa|encargad[oa]|especialista|profesional|administrativ[oa]|cajer[oa]|meser[oa]|camarer[oa]|personal|candidat[oa]|postulante|disenador[a]?|medico|medica|enfermer[oa]|docente|profesor[a]?)(?:\s+de\s+\w+){0,2}\s+(?:mujer|mujeres|femenin[oa]|dama|damas)\b(?!\s*(?:y|o|\/)\s*(?:masculino|varon|hombre|caballero))",
         "Excluyente",
         "Asocia explícitamente el título del puesto exclusivamente a mujeres (p. ej., 'recepcionista mujer' o 'personal femenino').",
         "Utilizar denominación neutra del cargo sin restringir por sexo.",
@@ -185,19 +198,19 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
         "Eliminar la restricción de sexo entre paréntesis del título o descripción.",
     ),
     (
-        r"(?:[-–—/|:]\s*)\b(?:mujer(?:es)?|damas?)\b(?!\s*(?:y|o|\/)\s*(?:varon(?:es)?|hombre(?:s)?|caballeros?))",
+        r"(?<!varones)(?<!varones\s)(?<!hombres)(?<!hombres\s)(?<!caballeros)(?<!caballeros\s)(?:[-–—/|:]\s*)\b(?:mujer(?:es)?|damas?)\b(?!\s*(?:y|o|\/)\s*(?:varon(?:es)?|hombre(?:s)?|caballeros?))",
         "Excluyente",
         "Restringe la vacante exclusivamente a mujeres en el título o encabezado (p. ej., '- Mujer').",
         "Suprimir la especificación de sexo en el título de la oferta.",
     ),
     (
-        r"\b(?:operari[oa]s?|personal|auxiliar(?:es)?|ayudantes?|reponedor(?:es)?|almaceneros?|mozos?|vendedor(?:es|as)?|promotor(?:es|as)?|cajer[oa]s?|limpieza|produccion|seguridad|choferes?|conductores?|estibadores?|tecnic[oa]s?)(?:\s+de\s+\w+){0,2}\s+(?:mujeres|mujer|damas|femenino|femenina)\b",
+        r"\b(?:operari[oa]s?|personal|auxiliar(?:es)?|ayudantes?|reponedor(?:es)?|almaceneros?|mozos?|vendedor(?:es|as)?|promotor(?:es|as)?|cajer[oa]s?|limpieza|produccion|seguridad|choferes?|conductores?|estibadores?|tecnic[oa]s?)(?:\s+de\s+\w+){0,2}\s+(?:mujeres|mujer|damas|femenino|femenina)\b(?!\s*(?:y|o|\/)\s*(?:masculino|varon|hombre|caballero))",
         "Excluyente",
         "Asocia el puesto operativo o comercial exclusivamente a mujeres.",
         "Redactar el puesto de forma neutra sin restringir por sexo.",
     ),
     (
-        r"\b(?:buscamos|requerimos|solicitamos|necesitamos|convocamos|contratamos|se\s+requieren?|se\s+necesitan?)\s+(?:a\s+)?(?:mujeres|damas)\b|(?<!de\s)(?<!para\s)\bdamas\s+(?:universitarias|jovenes|de\s+buena|con\s+experiencia|para\s+trabajar|proactivas|dinamicas)\b|(?<!y\s)(?<!o\s)(?<!ni\s)(?<!hombres,\s)(?<!varones,\s)\bmujeres\b(?!\s*(?:,|y|o|\/)\s*(?:hombres|varones))(?=\s*(?:[-–—/|.\n]|$))",
+        r"\b(?:buscamos|requerimos|solicitamos|necesitamos|convocamos|contratamos|se\s+requieren?|se\s+necesitan?)\s+(?:a\s+)?(?:mujeres|damas)\b|(?<!de\s)(?<!para\s)\bdamas\s+(?:universitarias|jovenes|de\s+buena|con\s+experiencia|para\s+trabajar|proactivas|dinamicas)\b|(?<!y\s)(?<!o\s)(?<!ni\s)(?<!hombres,\s)(?<!varones,\s)(?<!varones/)(?<!varones\s/\s)(?<!hombres/)(?<!hombres\s/\s)\bmujeres\b(?!\s*(?:,|y|o|\/)\s*(?:hombres|varones))(?=\s*(?:[-–—/|.\n]|$))",
         "Excluyente",
         "Restringe la convocatoria específicamente a mujeres o damas.",
         "Abrir la convocatoria a todas las personas que cumplan los requisitos del puesto.",
@@ -471,7 +484,7 @@ BIAS_PATTERNS: List[Tuple[str, str, str, str]] = [
         "Utilizar descriptores profesionales neutros enfocados en competencias.",
     ),
     (
-        r"\b(?:caracter\s+fuerte|duro\s+e\s+imponente|recio\s+y\s+dominante|competitivo\s+y\s+ambicioso|voraz\s+y\s+dispuesto\s+a\s+dominar|implacable\s+y\s+competitivo|ambicioso\s+con\s+mentalidad\s+ganadora|audaz\s+y\s+contundente|combativo)\b|(?<!salario\s)(?<!salario\sbase\s)(?<!sueldo\s)(?<!remuneracion\s)(?<!compensacion\s)(?<!beneficios\s)(?<!paquete\s)(?<!mercado\s)(?<!entorno\s)(?<!ritmo\s)\bcompetitiv[oa]s?\b",
+        r"\b(?:caracter\s+fuerte|duro\s+e\s+imponente|recio\s+y\s+dominante|competitivo\s+y\s+ambicioso|voraz\s+y\s+dispuesto\s+a\s+dominar|implacable\s+y\s+competitivo|ambicioso\s+con\s+mentalidad\s+ganadora|audaz\s+y\s+contundente|combativo)\b|(?<!salario\s)(?<!salario\sbase\s)(?<!salarios\s)(?<!sueldo\s)(?<!sueldo\sbase\s)(?<!sueldos\s)(?<!basico\s)(?<!remuneracion\s)(?<!remuneraciones\s)(?<!remunerativo\s)(?<!compensacion\s)(?<!compensaciones\s)(?<!beneficios\s)(?<!paquete\s)(?<!mercado\s)(?<!entorno\s)(?<!entornos\s)(?<!ritmo\s)(?<!precio\s)(?<!precios\s)(?<!propuesta\s)(?<!propuestas\s)(?<!posicion\s)(?<!posicionamiento\s)(?<!ventaja\s)(?<!ventajas\s)(?<!tarifa\s)(?<!tarifas\s)(?<!oferta\s)(?<!ofertas\s)(?<!condiciones\s)(?<!ingresos\s)(?<!analisis\s)(?<!estrategia\s)\bcompetitiv[oa]s?\b(?!\s+(?:esquema|salario|sueldo|paquete|precio|mercado|beneficio))",
         "Masculino",
         "Adjetivos agentivos o hipercompetitivos asociados a codificación de género masculina.",
         "Sustituir por competencias observables como 'orientado al logro' o 'toma de decisiones fundamentada'.",
@@ -669,14 +682,21 @@ def _is_in_inclusive_clause(folded_text: str, start: int, matched_folded: str) -
     """Detecta si una mención sensible aparece dentro de una cláusula inclusiva/anti-discriminación."""
     if _ALWAYS_BIASED_RE.search(matched_folded):
         return False
-    # Buscar inicio de la oración actual (máximo 110 caracteres hacia atrás)
-    window_start = max(0, start - 110)
+    # Buscar dentro de la oración actual (hasta 380 caracteres atrás y 160 hacia adelante)
+    window_start = max(0, start - 380)
     prefix = folded_text[window_start:start]
-    # Recortar al último delimitador de oración para no mezclar oraciones previas
     last_sep = max(prefix.rfind("."), prefix.rfind("!"), prefix.rfind("?"), prefix.rfind("\n"))
     if last_sep != -1:
         prefix = prefix[last_sep + 1 :]
-    return bool(_INCLUSIVE_CONTEXT_RE.search(prefix))
+    if _INCLUSIVE_CONTEXT_RE.search(prefix):
+        return True
+
+    window_end = min(len(folded_text), start + len(matched_folded) + 160)
+    suffix = folded_text[start + len(matched_folded) : window_end]
+    next_seps = [idx for idx in (suffix.find("."), suffix.find("!"), suffix.find("?"), suffix.find("\n")) if idx != -1]
+    if next_seps:
+        suffix = suffix[: min(next_seps)]
+    return bool(_INCLUSIVE_CONTEXT_RE.search(suffix))
 
 
 def detect_biased_spans(text: str) -> List[DetectedSpan]:
@@ -1358,7 +1378,12 @@ def analyze_job_posting(text: str, model_key: str | None = None, pipeline=None) 
         # Escenario 1: Evidencia léxica explícita detectada
         decision_mode = "lexical_explicit"
         dominant_lex_cat = _select_dominant_lexical_category(spans)
-        if raw_ml_category in detected_categories and ml_reliability != "baja":
+        has_explicit_sex_restriction = ("Excluyente" in detected_categories) or any(
+            _span_weight(s) >= 26.0 for s in spans
+        )
+        if has_explicit_sex_restriction:
+            predicted_class = dominant_lex_cat
+        elif raw_ml_category in detected_categories and ml_reliability != "baja":
             predicted_class = raw_ml_category
         elif raw_ml_category != "Neutro" and ml_reliability == "alta":
             predicted_class = raw_ml_category
@@ -1376,9 +1401,6 @@ def analyze_job_posting(text: str, model_key: str | None = None, pipeline=None) 
             1,
         )
 
-        has_explicit_sex_restriction = ("Excluyente" in detected_categories) or any(
-            _span_weight(s) >= 26.0 for s in spans
-        )
         if (
             inclusivity_score < 45.0
             or len(spans) >= 3
