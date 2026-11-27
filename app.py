@@ -4,26 +4,16 @@ from __future__ import annotations
 
 import gc
 import html
-from pathlib import Path
 from typing import Dict
 
-import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.bias_analyzer import (
-    analyze_job_posting,
-    load_model,
-    load_saved_metrics,
-)
+from src.bias_analyzer import analyze_job_posting, load_model
 from src.config import (
     ALL_CATEGORIES,
     BIAS_CATEGORIES,
     CATEGORY_INFO,
-    CONSOLIDATED_DATASET_PATH,
-    CONSOLIDATED_EXCEL_PATH,
-    MODEL_DISPLAY_NAMES,
     PRELOADED_EXAMPLES,
     RF_MODEL_PATH,
 )
@@ -543,53 +533,12 @@ st.markdown(
 
 
 # ---------- RECURSOS EN CACHÉ (OPTIMIZADOS PARA BAJO CONSUMO DE RAM) ----------
-DATASET_TABLE_COLUMNS = [
-    "id",
-    "origen",
-    "portal",
-    "puesto",
-    "categoria",
-    "nivel_riesgo",
-    "frases_detectadas",
-    "texto",
-]
-
-
 @st.cache_resource(show_spinner=False)
-def get_cached_rf_model():
-    """Carga una sola vez en memoria el modelo Random Forest preentrenado y comprimido."""
+def get_cached_model():
+    """Carga una sola vez en memoria el clasificador preentrenado y comprimido."""
     model = load_model("random_forest")
     gc.collect()
     return model
-
-
-@st.cache_data(show_spinner=False)
-def get_cached_metrics() -> dict:
-    return load_saved_metrics()
-
-
-@st.cache_data(show_spinner=False)
-def get_cached_dataset() -> pd.DataFrame:
-    """Carga solo columnas necesarias del CSV consolidado y trunca la vista previa del texto a 300 car."""
-    if not CONSOLIDATED_DATASET_PATH.exists():
-        return pd.DataFrame(columns=DATASET_TABLE_COLUMNS)
-    df = pd.read_csv(
-        CONSOLIDATED_DATASET_PATH,
-        usecols=DATASET_TABLE_COLUMNS,
-        dtype={
-            "id": "string",
-            "origen": "category",
-            "portal": "category",
-            "puesto": "string",
-            "categoria": "category",
-            "nivel_riesgo": "category",
-            "frases_detectadas": "string",
-            "texto": "string",
-        },
-    )
-    df["texto"] = df["texto"].fillna("").map(lambda t: (t[:300] + "…") if len(t) > 300 else t)
-    gc.collect()
-    return df
 
 
 def render_category_legend() -> None:
@@ -659,7 +608,7 @@ def make_bias_probability_chart(bias_probs: Dict[str, float]) -> go.Figure:
         )
     )
     fig.update_layout(
-        title=dict(text="Probabilidad por categoría de sesgo (Modelo ML)", font=dict(color="#0F172A", size=15)),
+        title=dict(text="Probabilidad por categoría de sesgo", font=dict(color="#0F172A", size=15)),
         xaxis=dict(title="Probabilidad (%)", range=[0, max(105, max(vals) + 15)], showgrid=True),
         yaxis=dict(autorange="reversed", title=""),
         height=310,
@@ -667,10 +616,6 @@ def make_bias_probability_chart(bias_probs: Dict[str, float]) -> go.Figure:
         font=dict(size=13, color="#0F172A"),
     )
     return apply_light_plotly_theme(fig)
-
-
-def read_file_bytes(path: Path) -> bytes:
-    return path.read_bytes() if path.exists() else b""
 
 
 def render_findings_html_table(spans) -> str:
@@ -704,20 +649,35 @@ def render_findings_html_table(spans) -> str:
     )
 
 
+def _sanitize_ui_explanation(text: str) -> str:
+    """Elimina menciones técnicas a algoritmos internos en textos mostrados al usuario."""
+    cleaned = (
+        text.replace("de Random Forest", "del motor de análisis")
+        .replace("de Decision Tree", "del motor de análisis")
+        .replace("de SVM", "del motor de análisis")
+        .replace("Random Forest", "el motor de análisis")
+        .replace("Decision Tree", "el motor de análisis")
+        .replace("SVM", "el motor de análisis")
+        .replace("TF-IDF", "léxica")
+        .replace("ML", "estadístico")
+    )
+    return html.escape(cleaned)
+
+
 def render_hybrid_status_banner(analysis) -> str:
-    """Renderiza un aviso explicativo limpio cuando aplica calibración OOD o alerta de sesgo implícito."""
-    explanation = html.escape(analysis.decision_explanation)
+    """Renderiza un aviso explicativo limpio cuando aplica calibración o alerta de sesgo implícito."""
+    explanation = _sanitize_ui_explanation(analysis.decision_explanation)
     if analysis.decision_mode == "ml_implicit_bias":
         return (
             '<div class="hybrid-banner-warn">'
-            "<strong>⚠️ Alerta de posible sesgo implícito (patrón estadístico ML):</strong> "
+            "<strong>⚠️ Alerta de posible sesgo implícito (patrón estadístico):</strong> "
             f"{explanation}"
             "</div>"
         )
     if analysis.decision_mode == "calibrated_neutral":
         return (
             '<div class="hybrid-banner-info">'
-            "<strong>ℹ️ Calibración híbrida aplicada (baja confianza ML / vocabulario fuera de dominio):</strong> "
+            "<strong>ℹ️ Calibración híbrida aplicada (baja certeza estadística / vocabulario poco frecuente):</strong> "
             f"{explanation}"
             "</div>"
         )
@@ -732,7 +692,7 @@ def render_hybrid_status_banner(analysis) -> str:
 
 
 def render_ml_explainability_html(analysis) -> str:
-    """Renderiza métricas de incertidumbre, cobertura TF-IDF y términos influyentes del clasificador ML."""
+    """Renderiza métricas de incertidumbre, cobertura léxica y términos influyentes del análisis."""
     rel_styles = {
         "alta": ("#DCFCE7", "#166534", "#86EFAC"),
         "media": ("#FEF3C7", "#92400E", "#FCD34D"),
@@ -745,9 +705,9 @@ def render_ml_explainability_html(analysis) -> str:
     header_html = (
         '<div class="ml-exp-header">'
         f'<span class="ml-rel-pill" style="background:{bg}; color:{fg}; border:1px solid {border};">'
-        f"Confiabilidad ML: {html.escape(analysis.ml_reliability_label)}</span>"
+        f"Confiabilidad estadística: {html.escape(analysis.ml_reliability_label)}</span>"
         f'<span style="font-size:0.78rem; color:#475569;">'
-        f'Señal cruda: <strong style="color:{raw_meta["text"]};">{html.escape(analysis.raw_ml_category)}</strong> '
+        f'Señal base: <strong style="color:{raw_meta["text"]};">{html.escape(analysis.raw_ml_category)}</strong> '
         f"({analysis.ml_confidence * 100:.1f}%)</span>"
         "</div>"
     )
@@ -756,15 +716,15 @@ def render_ml_explainability_html(analysis) -> str:
     diag_grid_html = (
         '<div class="ml-diag-grid">'
         '<div class="ml-diag-box">'
-        '<div class="ml-diag-label">Cobertura TF-IDF</div>'
+        '<div class="ml-diag-label">Cobertura léxica</div>'
         f'<div class="ml-diag-val">{cov_pct:.1f}%</div>'
-        f'<div class="ml-diag-sub">{analysis.recognized_tokens}/{analysis.total_tokens} tokens · '
-        f"{analysis.matched_features} n-gramas</div>"
+        f'<div class="ml-diag-sub">{analysis.recognized_tokens}/{analysis.total_tokens} términos · '
+        f"{analysis.matched_features} expresiones</div>"
         "</div>"
         '<div class="ml-diag-box">'
-        '<div class="ml-diag-label">Confianza máx. ML</div>'
+        '<div class="ml-diag-label">Confianza máx.</div>'
         f'<div class="ml-diag-val">{analysis.ml_confidence * 100:.1f}%</div>'
-        f'<div class="ml-diag-sub">Clase cruda: {html.escape(analysis.raw_ml_category)}</div>'
+        f'<div class="ml-diag-sub">Señal base: {html.escape(analysis.raw_ml_category)}</div>'
         "</div>"
         '<div class="ml-diag-box">'
         '<div class="ml-diag-label">Margen (Top1 − Top2)</div>'
@@ -783,35 +743,27 @@ def render_ml_explainability_html(analysis) -> str:
         term_rows = []
         for item in analysis.influential_terms:
             width_pct = max(8.0, min(100.0, item.influence_score * 100.0))
-            node_tag = (
-                ' <span style="font-size:0.66rem; background:#EEF2FF; color:#3730A3; '
-                'padding:1px 5px; border-radius:4px; font-weight:600;">nodo activo</span>'
-                if item.source == "ruta_arbol"
-                else ""
-            )
             term_rows.append(
                 '<div class="ml-term-row">'
                 f'<div class="ml-term-name" title="{html.escape(item.term)}">'
-                f"{html.escape(item.term)}{node_tag}</div>"
+                f"{html.escape(item.term)}</div>"
                 '<div class="ml-term-bar-bg">'
                 f'<div class="ml-term-bar-fill" style="width:{width_pct:.1f}%; background:{bar_color};"></div>'
                 "</div>"
-                f'<div class="ml-term-weight">TF-IDF {item.tfidf_weight:.2f}</div>'
+                f'<div class="ml-term-weight">Peso {item.tfidf_weight:.2f}</div>'
                 "</div>"
             )
         terms_html = (
-            '<div style="font-size:0.82rem; font-weight:700; color:#1E293B; margin-bottom:2px;">'
-            f"Términos del aviso que más influyeron en {html.escape(analysis.model_name)}"
+            '<div style="font-size:0.82rem; font-weight:700; color:#1E293B; margin-bottom:6px;">'
+            "Términos del aviso que más influyeron en el análisis"
             "</div>"
-            f'<div style="font-size:0.74rem; color:#64748B; margin-bottom:8px;">'
-            f"Método: {html.escape(analysis.explainability_method)}</div>"
             + "".join(term_rows)
         )
     else:
         terms_html = (
             '<div style="font-size:0.82rem; color:#64748B; background:#F8FAFC; '
             'border:1px solid #E2E8F0; border-radius:8px; padding:8px 10px;">'
-            "Ningún término del texto coincide con el vocabulario entrenado del vectorizador TF-IDF."
+            "Ningún término del texto coincide con el vocabulario de referencia del analizador."
             "</div>"
         )
 
@@ -849,16 +801,12 @@ def render_changes_html_table(changes) -> str:
     )
 
 
-# ---------- INICIALIZACIÓN (SOLO CARGA DE ARTEFACTOS PREENTRENADOS, SIN ENTRENAMIENTO) ----------
+# ---------- INICIALIZACIÓN (SOLO CARGA DE MODELO PREENTRENADO, SIN ENTRENAMIENTO) ----------
 if not RF_MODEL_PATH.exists():
-    st.error(
-        f"No se encontró el modelo preentrenado `{RF_MODEL_PATH.name}`. "
-        "Ejecuta offline `python -m src.train_models` antes de desplegar."
-    )
+    st.error("No se encontró el archivo de modelo preentrenado requerido para el análisis.")
     st.stop()
 
-rf_model = get_cached_rf_model()
-metrics_data = get_cached_metrics()
+rf_model = get_cached_model()
 
 if "job_text" not in st.session_state:
     first_example_name = next(iter(PRELOADED_EXAMPLES.keys()))
@@ -876,25 +824,6 @@ if "last_analyzed_text" not in st.session_state:
 selected_model_key = "random_forest"
 with st.sidebar:
     st.markdown("## ⚙️ Configuración")
-    ds_total_sidebar = metrics_data.get("dataset", {}).get("total_samples", 1400) if metrics_data else 1400
-    st.markdown(
-        '<div style="background:#EFF6FF; border:1px solid #BFDBFE; border-left:4px solid #2563EB; '
-        'border-radius:8px; padding:10px 12px; margin-bottom:10px;">'
-        '<div style="font-size:0.74rem; color:#1E40AF; font-weight:700; text-transform:uppercase; '
-        'letter-spacing:0.03em;">Motor ML Fijo</div>'
-        '<div style="font-size:1.02rem; font-weight:800; color:#0F172A; margin-top:2px;">🤖 Random Forest</div>'
-        f'<div style="font-size:0.76rem; color:#475569; margin-top:2px;">Entrenado con {ds_total_sidebar:,} avisos '
-        "(80/20 estratificado)</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    if metrics_data and selected_model_key in metrics_data.get("models", {}):
-        m_info = metrics_data["models"][selected_model_key]["test_metrics"]
-        c1, c2 = st.columns(2)
-        c1.metric("Accuracy", f"{m_info['accuracy'] * 100:.1f}%")
-        c2.metric("F1-Macro", f"{m_info['f1_macro'] * 100:.1f}%")
-
     append_clause = st.checkbox(
         "Incluir cláusula de igualdad al reescribir",
         value=True,
@@ -921,8 +850,7 @@ st.markdown(
     <div class="main-header">
         <h1>⚖️ Plataforma de Detección y Mitigación de Sesgos de Género en Avisos de Empleo</h1>
         <p>
-            Análisis NLP híbrido en español (TF-IDF + Random Forest entrenado con 1,400 avisos sintéticos y reales de Perú),
-            resaltado explicable de frases sesgadas y reescritura inclusiva preservando requisitos técnicos.
+            Análisis inteligente en español para detección explicable de sesgos y reescritura inclusiva preservando requisitos técnicos.
         </p>
     </div>
     """,
@@ -930,425 +858,274 @@ st.markdown(
 )
 
 
-# ---------- PESTAÑAS PRINCIPALES ----------
-df_dataset_preview = get_cached_dataset()
-total_dataset_count = len(df_dataset_preview) if not df_dataset_preview.empty else 1400
-tab_analyzer, tab_dataset = st.tabs(
-    [
-        "🔍 Analizador y Mitigador",
-        f"📁 Dataset Consolidado ({total_dataset_count:,} avisos)",
-    ]
+# ==================== ANALIZADOR Y MITIGADOR (VISTA PRINCIPAL ÚNICA) ====================
+st.markdown("### 1. Ingresa o selecciona una oferta laboral en español")
+
+col_ex, col_btn_load, col_btn_clear = st.columns([4, 1.3, 1.1])
+with col_ex:
+    example_choice = st.selectbox(
+        "Ejemplos de prueba precargados",
+        options=list(PRELOADED_EXAMPLES.keys()),
+        index=list(PRELOADED_EXAMPLES.keys()).index(st.session_state.selected_example)
+        if st.session_state.selected_example in PRELOADED_EXAMPLES
+        else 0,
+        label_visibility="collapsed",
+    )
+with col_btn_load:
+    if st.button("📋 Cargar ejemplo", width="stretch"):
+        st.session_state.selected_example = example_choice
+        st.session_state.job_text = PRELOADED_EXAMPLES[example_choice]
+        st.session_state.rewritten_output = None
+        st.rerun()
+with col_btn_clear:
+    if st.button("🧹 Limpiar", width="stretch"):
+        st.session_state.job_text = ""
+        st.session_state.rewritten_output = None
+        st.rerun()
+
+job_text_input = st.text_area(
+    "Pega aquí el texto completo del aviso de empleo:",
+    value=st.session_state.job_text,
+    height=185,
+    placeholder="Ej.: Buscamos un desarrollador senior aguerrido, menor de 30 años, con experiencia en Python, SQL y AWS...",
 )
 
+if job_text_input != st.session_state.job_text:
+    st.session_state.job_text = job_text_input
+    st.session_state.rewritten_output = None
 
-# ==================== TAB 1: ANALIZADOR Y MITIGADOR ====================
-with tab_analyzer:
-    st.markdown("### 1. Ingresa o selecciona una oferta laboral en español")
-
-    col_ex, col_btn_load, col_btn_clear = st.columns([4, 1.3, 1.1])
-    with col_ex:
-        example_choice = st.selectbox(
-            "Ejemplos de prueba precargados",
-            options=list(PRELOADED_EXAMPLES.keys()),
-            index=list(PRELOADED_EXAMPLES.keys()).index(st.session_state.selected_example)
-            if st.session_state.selected_example in PRELOADED_EXAMPLES
-            else 0,
-            label_visibility="collapsed",
-        )
-    with col_btn_load:
-        if st.button("📋 Cargar ejemplo", width="stretch"):
-            st.session_state.selected_example = example_choice
-            st.session_state.job_text = PRELOADED_EXAMPLES[example_choice]
-            st.session_state.rewritten_output = None
-            st.rerun()
-    with col_btn_clear:
-        if st.button("🧹 Limpiar", width="stretch"):
-            st.session_state.job_text = ""
-            st.session_state.rewritten_output = None
-            st.rerun()
-
-    job_text_input = st.text_area(
-        "Pega aquí el texto completo del aviso de empleo:",
-        value=st.session_state.job_text,
-        height=185,
-        placeholder="Ej.: Buscamos un desarrollador senior aguerrido, menor de 30 años, con experiencia en Python, SQL y AWS...",
+act_col1, act_col2, act_col3 = st.columns([1.4, 1.9, 2.7])
+with act_col1:
+    analyze_clicked = st.button("🔎 Analizar oferta", type="primary", width="stretch")
+with act_col2:
+    rewrite_clicked = st.button("✨ Generar versión neutra e inclusiva", width="stretch")
+with act_col3:
+    st.caption(
+        "Los requisitos técnicos (lenguajes, herramientas, certificaciones y experiencia) se preservan intactos."
     )
 
-    if job_text_input != st.session_state.job_text:
-        st.session_state.job_text = job_text_input
-        st.session_state.rewritten_output = None
+if not st.session_state.job_text.strip():
+    st.info("Pega una oferta laboral o carga uno de los ejemplos precargados para iniciar el análisis.")
+else:
+    analysis = analyze_job_posting(
+        st.session_state.job_text,
+        model_key=selected_model_key,
+        pipeline=rf_model,
+    )
 
-    act_col1, act_col2, act_col3 = st.columns([1.4, 1.9, 2.7])
-    with act_col1:
-        analyze_clicked = st.button("🔎 Analizar oferta", type="primary", width="stretch")
-    with act_col2:
-        rewrite_clicked = st.button("✨ Generar versión neutra e inclusiva", width="stretch")
-    with act_col3:
-        st.caption(
-            f"Modelo activo: **{MODEL_DISPLAY_NAMES[selected_model_key]}** · "
-            "Los requisitos técnicos (lenguajes, herramientas, certificaciones y experiencia) se preservan intactos."
-        )
-
-    if not st.session_state.job_text.strip():
-        st.info("Pega una oferta laboral o carga uno de los ejemplos precargados para iniciar el análisis.")
-    else:
-        analysis = analyze_job_posting(
-            st.session_state.job_text,
-            model_key=selected_model_key,
-            pipeline=rf_model,
-        )
-
-        # KPIs principales
-        st.markdown("### 2. Resultados del diagnóstico de sesgos")
-        pred_meta = CATEGORY_INFO[analysis.predicted_class]
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        with kpi1:
-            multi_bias_html = ""
-            if len(analysis.detected_categories) >= 2:
-                cats_str = ", ".join(analysis.detected_categories)
-                multi_bias_html = (
-                    '<div class="kpi-card-multi">'
-                    f'<strong>Sesgo múltiple detectado:</strong> {html.escape(cats_str)}'
-                    "</div>"
-                )
-            if analysis.decision_mode == "calibrated_neutral":
-                if analysis.raw_ml_category != "Neutro":
-                    kpi1_sub = (
-                        f"Calibrado · ML crudo: {html.escape(analysis.raw_ml_category)} "
-                        f"({analysis.ml_confidence * 100:.1f}%)"
-                    )
-                else:
-                    kpi1_sub = (
-                        f"Calibrado · Cobertura TF-IDF: {analysis.vocabulary_coverage * 100:.0f}%"
-                    )
-            elif analysis.decision_mode == "ml_implicit_bias":
+    # KPIs principales
+    st.markdown("### 2. Resultados del diagnóstico de sesgos")
+    pred_meta = CATEGORY_INFO[analysis.predicted_class]
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
+        multi_bias_html = ""
+        if len(analysis.detected_categories) >= 2:
+            cats_str = ", ".join(analysis.detected_categories)
+            multi_bias_html = (
+                '<div class="kpi-card-multi">'
+                f'<strong>Sesgo múltiple detectado:</strong> {html.escape(cats_str)}'
+                "</div>"
+            )
+        if analysis.decision_mode == "calibrated_neutral":
+            if analysis.raw_ml_category != "Neutro":
                 kpi1_sub = (
-                    f"Sesgo implícito ML ({analysis.ml_confidence * 100:.1f}%) · Sin frases explícitas"
-                )
-            elif analysis.decision_mode == "lexical_explicit" and analysis.predicted_class != analysis.raw_ml_category:
-                kpi1_sub = (
-                    f"Evidencia léxica · ML crudo: {html.escape(analysis.raw_ml_category)} "
+                    f"Calibrado · Señal base: {html.escape(analysis.raw_ml_category)} "
                     f"({analysis.ml_confidence * 100:.1f}%)"
                 )
             else:
                 kpi1_sub = (
-                    f"Confianza ML: {analysis.probabilities[analysis.predicted_class] * 100:.1f}% · "
-                    f"Cobertura: {analysis.vocabulary_coverage * 100:.0f}%"
+                    f"Calibrado · Cobertura léxica: {analysis.vocabulary_coverage * 100:.0f}%"
                 )
-
-            st.markdown(
-                f'<div class="kpi-card" style="background:{pred_meta["bg"]}; '
-                f'border:1px solid {pred_meta["border"]};">'
-                f'<div class="kpi-card-label">DIAGNÓSTICO HÍBRIDO</div>'
-                f'<div class="kpi-card-value" style="color:{pred_meta["text"]};">'
-                f"{html.escape(analysis.predicted_class)}</div>"
-                f'<div class="kpi-card-sub">{kpi1_sub}</div>'
-                f"{multi_bias_html}"
-                f"</div>",
-                unsafe_allow_html=True,
+        elif analysis.decision_mode == "ml_implicit_bias":
+            kpi1_sub = (
+                f"Sesgo implícito ({analysis.ml_confidence * 100:.1f}%) · Sin frases explícitas"
             )
-        with kpi2:
-            st.metric("Índice de Inclusividad", f"{analysis.inclusivity_score:.1f} / 100")
-        with kpi3:
-            st.metric("Nivel de Riesgo", analysis.risk_level)
-        with kpi4:
-            if analysis.spans:
-                kpi4_delta = f"{len(analysis.detected_categories)} categoría(s)"
-                kpi4_delta_color = "inverse"
-            elif analysis.decision_mode == "ml_implicit_bias":
-                kpi4_delta = "Sesgo implícito ML"
-                kpi4_delta_color = "off"
-            else:
-                kpi4_delta = "Sin alertas léxicas"
-                kpi4_delta_color = "normal"
-            st.metric(
-                "Frases Sesgadas Detectadas",
-                f"{len(analysis.spans)}",
-                delta=kpi4_delta,
-                delta_color=kpi4_delta_color,
+        elif analysis.decision_mode == "lexical_explicit" and analysis.predicted_class != analysis.raw_ml_category:
+            kpi1_sub = (
+                f"Evidencia léxica · Señal base: {html.escape(analysis.raw_ml_category)} "
+                f"({analysis.ml_confidence * 100:.1f}%)"
             )
-
-        banner_html = render_hybrid_status_banner(analysis)
-        if banner_html:
-            st.markdown(banner_html, unsafe_allow_html=True)
-
-        st.markdown("")
-        col_left, col_right = st.columns([1.25, 1.0], gap="large")
-
-        with col_left:
-            st.markdown("#### 🖍️ Resaltado visual de frases sesgadas")
-            render_category_legend()
-            st.markdown(analysis.highlighted_html, unsafe_allow_html=True)
-            if analysis.spans:
-                st.caption("Pasa el cursor sobre cualquier frase resaltada para ver la explicación y sugerencia.")
-            elif analysis.decision_mode == "ml_implicit_bias":
-                st.warning(
-                    "No se detectaron frases sesgadas explícitas en el texto, pero el clasificador ML "
-                    "identificó un posible patrón estadístico implícito. Revisa los términos influyentes "
-                    "en el panel derecho."
-                )
-            elif analysis.decision_mode == "calibrated_neutral":
-                st.success(
-                    "No se detectaron frases sesgadas explícitas en el texto analizado. "
-                    "El motor híbrido calibró el diagnóstico final a Neutro ante la baja confianza "
-                    "estadística o vocabulario fuera de dominio del modelo ML."
-                )
-            else:
-                st.success("No se detectaron frases sesgadas explícitas en el texto analizado.")
-
-            if analysis.spans:
-                st.markdown("#### 📋 Detalle de frases detectadas")
-                st.markdown(render_findings_html_table(analysis.spans), unsafe_allow_html=True)
-
-        with col_right:
-            st.markdown("#### 📈 Probabilidades por categoría de sesgo")
-            fig_probs = make_bias_probability_chart(analysis.bias_probabilities)
-            st.plotly_chart(fig_probs, theme=None, width="stretch")
-
-            neutro_pct = analysis.probabilities["Neutro"] * 100.0
-            neutro_meta = CATEGORY_INFO["Neutro"]
-            st.markdown(
-                f'<div style="padding:10px 14px; border-radius:8px; background:{neutro_meta["bg"]}; '
-                f'border:1px solid {neutro_meta["border"]}; color:{neutro_meta["text"]}; margin-bottom:12px;">'
-                f'<strong>Probabilidad clase Neutro / Inclusivo (ML crudo):</strong> {neutro_pct:.2f}%'
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-            with st.expander(
-                f"🔬 Explicabilidad ML y cobertura TF-IDF ({analysis.vocabulary_coverage * 100:.0f}% reconocido)",
-                expanded=analysis.decision_mode in ("ml_implicit_bias", "calibrated_neutral"),
-            ):
-                st.markdown(render_ml_explainability_html(analysis), unsafe_allow_html=True)
-
-            if analysis.technical_terms:
-                st.markdown("#### 🛠️ Requisitos técnicos identificados (protegidos)")
-                pills_html = "".join(
-                    f'<span class="tech-pill">{term}</span>' for term in analysis.technical_terms
-                )
-                st.markdown(pills_html, unsafe_allow_html=True)
-
-        # ---------- SECCIÓN DE REESCRITURA INCLUSIVA ----------
-        if rewrite_clicked:
-            st.session_state.rewritten_output = rewrite_inclusive(
-                st.session_state.job_text,
-                append_equality_clause=append_clause,
-            )
-
-        if st.session_state.rewritten_output is not None:
-            rw = st.session_state.rewritten_output
-            st.divider()
-            st.markdown("### 3. Versión reescrita con lenguaje neutro e inclusivo")
-
-            re_analysis = analyze_job_posting(
-                rw.rewritten_text,
-                model_key=selected_model_key,
-                pipeline=rf_model,
-            )
-
-            # Impacto antes vs después
-            imp1, imp2, imp3, imp4 = st.columns(4)
-            delta_incl = round(re_analysis.inclusivity_score - analysis.inclusivity_score, 1)
-            delta_neutro = round(
-                (re_analysis.probabilities["Neutro"] - analysis.probabilities["Neutro"]) * 100.0,
-                1,
-            )
-            delta_spans = len(re_analysis.spans) - len(analysis.spans)
-            total_tech = len(rw.preserved_technical_terms) + len(rw.missing_technical_terms)
-            tech_pct = (
-                (len(rw.preserved_technical_terms) / total_tech) * 100.0 if total_tech > 0 else 100.0
-            )
-
-            imp1.metric(
-                "Nuevo Índice de Inclusividad",
-                f"{re_analysis.inclusivity_score:.1f} / 100",
-                delta=f"{delta_incl:+.1f} pts",
-            )
-            imp2.metric(
-                "Probabilidad Neutro (ML)",
-                f"{re_analysis.probabilities['Neutro']*100:.1f}%",
-                delta=f"{delta_neutro:+.1f}%",
-            )
-            imp3.metric(
-                "Frases Sesgadas Restantes",
-                f"{len(re_analysis.spans)}",
-                delta=f"{delta_spans:+d}",
-                delta_color="inverse",
-            )
-            imp4.metric(
-                "Requisitos Técnicos Preservados",
-                f"{len(rw.preserved_technical_terms)}/{total_tech}" if total_tech else "N/A",
-                delta=f"{tech_pct:.0f}% intactos",
-            )
-
-            cmp_left, cmp_right = st.columns(2, gap="large")
-            with cmp_left:
-                st.markdown("#### ❌ Oferta original (sesgos resaltados)")
-                st.markdown(analysis.highlighted_html, unsafe_allow_html=True)
-            with cmp_right:
-                st.markdown("#### ✅ Oferta mitigada (lenguaje neutro e inclusivo)")
-                st.markdown(
-                    f'<div class="rewritten-box">{rw.rewritten_text}</div>',
-                    unsafe_allow_html=True,
-                )
-                st.download_button(
-                    "⬇️ Descargar oferta inclusiva (.txt)",
-                    data=rw.rewritten_text.encode("utf-8"),
-                    file_name="aviso_empleo_inclusivo.txt",
-                    mime="text/plain",
-                    width="stretch",
-                )
-
-            if rw.preserved_technical_terms:
-                st.success(
-                    f"Verificación técnica completada: se preservaron intactos "
-                    f"{len(rw.preserved_technical_terms)} de {total_tech} requisitos técnicos detectados "
-                    f"({', '.join(rw.preserved_technical_terms)})."
-                )
-            if rw.missing_technical_terms:
-                st.warning(
-                    f"Atención: verifica los siguientes términos técnicos: {', '.join(rw.missing_technical_terms)}"
-                )
-
-            if rw.changes:
-                st.markdown("#### 🔁 Transformaciones aplicadas")
-                st.markdown(render_changes_html_table(rw.changes), unsafe_allow_html=True)
-            else:
-                st.info("La oferta ya se encontraba redactada con lenguaje neutro; no se requirieron sustituciones.")
-
-
-# ==================== TAB 2: DATASET CONSOLIDADO (1,400 AVISOS) ====================
-with tab_dataset:
-    st.markdown("### Explorador del Dataset Consolidado (1,200 Sintéticos + 200 Reales de Perú)")
-    df_dataset = get_cached_dataset()
-
-    if df_dataset.empty:
-        st.warning("Dataset consolidado no encontrado.")
-    else:
-        has_origen = "origen" in df_dataset.columns
-        has_portal = "portal" in df_dataset.columns
-        n_total = len(df_dataset)
-        n_synth = int(df_dataset["origen"].str.contains("Sint", case=False, na=False).sum()) if has_origen else n_total
-        n_real = int(df_dataset["origen"].str.contains("Real", case=False, na=False).sum()) if has_origen else 0
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Consolidado", f"{n_total:,} avisos")
-        m2.metric("Avisos Sintéticos", f"{n_synth:,} ({100.0 * n_synth / n_total:.1f}%)")
-        m3.metric("Avisos Reales Perú", f"{n_real:,} ({100.0 * n_real / n_total:.1f}%)")
-        if metrics_data and "random_forest" in metrics_data.get("models", {}):
-            rf_tm = metrics_data["models"]["random_forest"]["test_metrics"]
-            m4.metric("RF Test (80/20)", f"Acc {rf_tm['accuracy']*100:.1f}% · F1 {rf_tm['f1_macro']*100:.1f}%")
         else:
-            m4.metric("Categorías", f"{len(ALL_CATEGORIES)} clases")
-
-        st.markdown("")
-        ds_c1, ds_c2 = st.columns([1.25, 1.0], gap="large")
-        with ds_c1:
-            if has_origen:
-                grouped = (
-                    df_dataset.groupby(["categoria", "origen"], observed=True)
-                    .size()
-                    .reset_index(name="Cantidad")
-                )
-                fig_dist = px.bar(
-                    grouped,
-                    x="categoria",
-                    y="Cantidad",
-                    color="origen",
-                    barmode="stack",
-                    text="Cantidad",
-                    category_orders={"categoria": ALL_CATEGORIES},
-                    color_discrete_map={
-                        "Sintético (1200)": "#2563EB",
-                        "Real Perú (200)": "#0D9488",
-                    },
-                    title="Distribución consolidada por categoría y origen (1,400 avisos)",
-                    labels={"categoria": "Categoría", "origen": "Origen"},
-                )
-                fig_dist.update_traces(textfont=dict(color="#FFFFFF", size=11))
-                fig_dist.update_layout(height=360, legend_title="Origen")
-            else:
-                counts = df_dataset["categoria"].value_counts().reindex(ALL_CATEGORIES).reset_index()
-                counts.columns = ["Categoría", "Cantidad"]
-                fig_dist = px.bar(
-                    counts,
-                    x="Categoría",
-                    y="Cantidad",
-                    color="Categoría",
-                    text="Cantidad",
-                    color_discrete_map={cat: CATEGORY_INFO[cat]["color"] for cat in ALL_CATEGORIES},
-                    title="Distribución por categoría",
-                )
-                fig_dist.update_traces(textposition="outside", textfont=dict(color="#0F172A"))
-                fig_dist.update_layout(showlegend=False, height=360)
-            apply_light_plotly_theme(fig_dist)
-            st.plotly_chart(fig_dist, theme=None, width="stretch")
-
-        with ds_c2:
-            st.markdown("#### Resumen estructural del corpus consolidado")
-            st.write(
-                f"- **Total consolidado:** `{n_total:,}` avisos únicos (sin duplicados ni valores nulos).\n"
-                f"- **Bloque Sintético:** `{n_synth:,}` avisos balanceados (`200` por cada una de las 6 categorías).\n"
-                f"- **Bloque Real Perú:** `{n_real:,}` avisos reales anonimizados (`100` de Computrabajo Perú y `100` de Bumeran Perú).\n"
-                "- **Respaldos originales intactos:** `data/dataset_sesgos_empleo.csv` (1,200) y `data/ofertas_reales_peru.csv` (200).\n"
-                "- **Entrenamiento Random Forest:** división estratificada `80% entrenamiento / 20% prueba` (`random_state=42`)."
-            )
-            dl1, dl2 = st.columns(2)
-            with dl1:
-                st.download_button(
-                    "⬇️ Descargar CSV (1,400)",
-                    data=read_file_bytes(CONSOLIDATED_DATASET_PATH),
-                    file_name="dataset_consolidado_1400.csv",
-                    mime="text/csv",
-                    width="stretch",
-                )
-            with dl2:
-                st.download_button(
-                    "⬇️ Descargar Excel (.xlsx)",
-                    data=read_file_bytes(CONSOLIDATED_EXCEL_PATH),
-                    file_name="dataset_consolidado_1400.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    width="stretch",
-                )
-
-        st.markdown("#### 🔎 Filtrar y explorar avisos")
-        f1, f2, f3, f4 = st.columns([1.1, 1.4, 1.1, 1.6])
-        with f1:
-            origen_choice = st.selectbox(
-                "Origen",
-                options=["Todos", "Sintético", "Real Perú"],
-                index=0,
-            )
-        with f2:
-            cat_filter = st.multiselect("Categoría", options=ALL_CATEGORIES, default=ALL_CATEGORIES)
-        with f3:
-            portal_opts = ["Todos"] + (sorted(df_dataset["portal"].unique().tolist()) if has_portal else [])
-            portal_choice = st.selectbox("Portal", options=portal_opts, index=0)
-        with f4:
-            keyword = st.text_input(
-                "Buscar palabra clave",
-                placeholder="Ej.: varones, señorita, edad, SAP, Python...",
+            kpi1_sub = (
+                f"Confianza: {analysis.probabilities[analysis.predicted_class] * 100:.1f}% · "
+                f"Cobertura: {analysis.vocabulary_coverage * 100:.0f}%"
             )
 
-        filtered = df_dataset[df_dataset["categoria"].isin(cat_filter)]
-        if has_origen and origen_choice == "Sintético":
-            filtered = filtered[filtered["origen"].str.contains("Sint", case=False, na=False)]
-        elif has_origen and origen_choice == "Real Perú":
-            filtered = filtered[filtered["origen"].str.contains("Real", case=False, na=False)]
-        if has_portal and portal_choice != "Todos":
-            filtered = filtered[filtered["portal"] == portal_choice]
-        if keyword.strip():
-            kw = keyword.strip()
-            mask = (
-                filtered["texto"].str.contains(kw, case=False, na=False)
-                | filtered["puesto"].str.contains(kw, case=False, na=False)
-                | (
-                    filtered["frases_detectadas"].str.contains(kw, case=False, na=False)
-                    if "frases_detectadas" in filtered.columns
-                    else False
-                )
-            )
-            filtered = filtered[mask]
+        st.markdown(
+            f'<div class="kpi-card" style="background:{pred_meta["bg"]}; '
+            f'border:1px solid {pred_meta["border"]};">'
+            f'<div class="kpi-card-label">DIAGNÓSTICO HÍBRIDO</div>'
+            f'<div class="kpi-card-value" style="color:{pred_meta["text"]};">'
+            f"{html.escape(analysis.predicted_class)}</div>"
+            f'<div class="kpi-card-sub">{kpi1_sub}</div>'
+            f"{multi_bias_html}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    with kpi2:
+        st.metric("Índice de Inclusividad", f"{analysis.inclusivity_score:.1f} / 100")
+    with kpi3:
+        st.metric("Nivel de Riesgo", analysis.risk_level)
+    with kpi4:
+        if analysis.spans:
+            kpi4_delta = f"{len(analysis.detected_categories)} categoría(s)"
+            kpi4_delta_color = "inverse"
+        elif analysis.decision_mode == "ml_implicit_bias":
+            kpi4_delta = "Sesgo implícito detectado"
+            kpi4_delta_color = "off"
+        else:
+            kpi4_delta = "Sin alertas léxicas"
+            kpi4_delta_color = "normal"
+        st.metric(
+            "Frases Sesgadas Detectadas",
+            f"{len(analysis.spans)}",
+            delta=kpi4_delta,
+            delta_color=kpi4_delta_color,
+        )
 
-        st.caption(f"Mostrando **{len(filtered):,}** de **{n_total:,}** avisos.")
-        st.dataframe(filtered, width="stretch", hide_index=True, height=440)
+    banner_html = render_hybrid_status_banner(analysis)
+    if banner_html:
+        st.markdown(banner_html, unsafe_allow_html=True)
+
+    st.markdown("")
+    col_left, col_right = st.columns([1.25, 1.0], gap="large")
+
+    with col_left:
+        st.markdown("#### 🖍️ Resaltado visual de frases sesgadas")
+        render_category_legend()
+        st.markdown(analysis.highlighted_html, unsafe_allow_html=True)
+        if analysis.spans:
+            st.caption("Pasa el cursor sobre cualquier frase resaltada para ver la explicación y sugerencia.")
+        elif analysis.decision_mode == "ml_implicit_bias":
+            st.warning(
+                "No se detectaron frases sesgadas explícitas en el texto, pero el análisis "
+                "identificó un posible patrón estadístico implícito. Revisa los términos influyentes "
+                "en el panel derecho."
+            )
+        elif analysis.decision_mode == "calibrated_neutral":
+            st.success(
+                "No se detectaron frases sesgadas explícitas en el texto analizado. "
+                "El motor híbrido calibró el diagnóstico final a Neutro ante la ausencia de alertas explícitas."
+            )
+        else:
+            st.success("No se detectaron frases sesgadas explícitas en el texto analizado.")
+
+        if analysis.spans:
+            st.markdown("#### 📋 Detalle de frases detectadas")
+            st.markdown(render_findings_html_table(analysis.spans), unsafe_allow_html=True)
+
+    with col_right:
+        st.markdown("#### 📈 Probabilidades por categoría de sesgo")
+        fig_probs = make_bias_probability_chart(analysis.bias_probabilities)
+        st.plotly_chart(fig_probs, theme=None, width="stretch")
+
+        neutro_pct = analysis.probabilities["Neutro"] * 100.0
+        neutro_meta = CATEGORY_INFO["Neutro"]
+        st.markdown(
+            f'<div style="padding:10px 14px; border-radius:8px; background:{neutro_meta["bg"]}; '
+            f'border:1px solid {neutro_meta["border"]}; color:{neutro_meta["text"]}; margin-bottom:12px;">'
+            f'<strong>Probabilidad clase Neutro / Inclusivo:</strong> {neutro_pct:.2f}%'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        with st.expander(
+            f"🔬 Explicabilidad y términos influyentes ({analysis.vocabulary_coverage * 100:.0f}% cobertura)",
+            expanded=analysis.decision_mode in ("ml_implicit_bias", "calibrated_neutral"),
+        ):
+            st.markdown(render_ml_explainability_html(analysis), unsafe_allow_html=True)
+
+        if analysis.technical_terms:
+            st.markdown("#### 🛠️ Requisitos técnicos identificados (protegidos)")
+            pills_html = "".join(
+                f'<span class="tech-pill">{term}</span>' for term in analysis.technical_terms
+            )
+            st.markdown(pills_html, unsafe_allow_html=True)
+
+    # ---------- SECCIÓN DE REESCRITURA INCLUSIVA ----------
+    if rewrite_clicked:
+        st.session_state.rewritten_output = rewrite_inclusive(
+            st.session_state.job_text,
+            append_equality_clause=append_clause,
+        )
+
+    if st.session_state.rewritten_output is not None:
+        rw = st.session_state.rewritten_output
+        st.divider()
+        st.markdown("### 3. Versión reescrita con lenguaje neutro e inclusivo")
+
+        re_analysis = analyze_job_posting(
+            rw.rewritten_text,
+            model_key=selected_model_key,
+            pipeline=rf_model,
+        )
+
+        # Impacto antes vs después
+        imp1, imp2, imp3, imp4 = st.columns(4)
+        delta_incl = round(re_analysis.inclusivity_score - analysis.inclusivity_score, 1)
+        delta_neutro = round(
+            (re_analysis.probabilities["Neutro"] - analysis.probabilities["Neutro"]) * 100.0,
+            1,
+        )
+        delta_spans = len(re_analysis.spans) - len(analysis.spans)
+        total_tech = len(rw.preserved_technical_terms) + len(rw.missing_technical_terms)
+        tech_pct = (
+            (len(rw.preserved_technical_terms) / total_tech) * 100.0 if total_tech > 0 else 100.0
+        )
+
+        imp1.metric(
+            "Nuevo Índice de Inclusividad",
+            f"{re_analysis.inclusivity_score:.1f} / 100",
+            delta=f"{delta_incl:+.1f} pts",
+        )
+        imp2.metric(
+            "Probabilidad Neutro",
+            f"{re_analysis.probabilities['Neutro']*100:.1f}%",
+            delta=f"{delta_neutro:+.1f}%",
+        )
+        imp3.metric(
+            "Frases Sesgadas Restantes",
+            f"{len(re_analysis.spans)}",
+            delta=f"{delta_spans:+d}",
+            delta_color="inverse",
+        )
+        imp4.metric(
+            "Requisitos Técnicos Preservados",
+            f"{len(rw.preserved_technical_terms)}/{total_tech}" if total_tech else "N/A",
+            delta=f"{tech_pct:.0f}% intactos",
+        )
+
+        cmp_left, cmp_right = st.columns(2, gap="large")
+        with cmp_left:
+            st.markdown("#### ❌ Oferta original (sesgos resaltados)")
+            st.markdown(analysis.highlighted_html, unsafe_allow_html=True)
+        with cmp_right:
+            st.markdown("#### ✅ Oferta mitigada (lenguaje neutro e inclusivo)")
+            st.markdown(
+                f'<div class="rewritten-box">{rw.rewritten_text}</div>',
+                unsafe_allow_html=True,
+            )
+            st.download_button(
+                "⬇️ Descargar oferta inclusiva (.txt)",
+                data=rw.rewritten_text.encode("utf-8"),
+                file_name="aviso_empleo_inclusivo.txt",
+                mime="text/plain",
+                width="stretch",
+            )
+
+        if rw.preserved_technical_terms:
+            st.success(
+                f"Verificación técnica completada: se preservaron intactos "
+                f"{len(rw.preserved_technical_terms)} de {total_tech} requisitos técnicos detectados "
+                f"({', '.join(rw.preserved_technical_terms)})."
+            )
+        if rw.missing_technical_terms:
+            st.warning(
+                f"Atención: verifica los siguientes términos técnicos: {', '.join(rw.missing_technical_terms)}"
+            )
+
+        if rw.changes:
+            st.markdown("#### 🔁 Transformaciones aplicadas")
+            st.markdown(render_changes_html_table(rw.changes), unsafe_allow_html=True)
+        else:
+            st.info("La oferta ya se encontraba redactada con lenguaje neutro; no se requirieron sustituciones.")

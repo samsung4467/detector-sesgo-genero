@@ -49,6 +49,8 @@ def run_all_tests() -> None:
             f"app.py no debe importar módulo pesado: {forbidden} ({imported_names})"
         )
     assert "train_and_evaluate" not in app_source, "app.py no debe invocar train_and_evaluate"
+    assert "st.tabs" not in app_source, "app.py debe mostrar únicamente el analizador sin pestañas"
+    assert "Modelo activo:" not in app_source, "app.py no debe mostrar 'Modelo activo:'"
 
     # 2. Validar respaldos intactos (1,200 sintéticos y 200 reales) y dataset consolidado (1,400)
     df_synth = pd.read_csv(DATASET_PATH)
