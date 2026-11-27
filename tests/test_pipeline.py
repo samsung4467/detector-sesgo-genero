@@ -110,14 +110,36 @@ def run_all_tests() -> None:
             f"Esperado Masculino/'{expected_phrase}', obtenido: {[(s.text, s.category) for s in spans]} | {ad}"
         )
 
-    # 5. Validar 4 ejemplos [Real Perú] en PRELOADED_EXAMPLES y reescritura limpia de todos los ejemplos
+    # 5. Validar 6 ejemplos [Real Perú] + 1 único [Caso de prueba] LGBTQ+ en PRELOADED_EXAMPLES
     real_examples = [k for k in PRELOADED_EXAMPLES if k.startswith("[Real Perú]")]
-    assert len(real_examples) == 4, f"Se esperaban exactamente 4 ejemplos [Real Perú], hay {len(real_examples)}"
+    synth_examples = [k for k in PRELOADED_EXAMPLES if k.startswith("[Caso de prueba]")]
+    assert len(real_examples) == 6, f"Se esperaban 6 ejemplos [Real Perú], hay {len(real_examples)}"
+    assert len(synth_examples) == 1 and "LGBTQ+" in synth_examples[0], (
+        f"Se esperaba exactamente 1 caso sintético LGBTQ+, encontrado: {synth_examples}"
+    )
+    assert len(PRELOADED_EXAMPLES) == 7, f"Total esperado 7 ejemplos, hay {len(PRELOADED_EXAMPLES)}"
+
+    expected_categories = {
+        "[Real Perú] Masculino — Asistente de Facturación (Bumeran)": "Masculino",
+        "[Real Perú] Femenino — Anfitriona / Azafata (Bumeran)": "Femenino",
+        "[Real Perú] Demográfico — Supervisor/a Mercaderista (Computrabajo)": "Demográfico",
+        "[Real Perú] Excluyente — Damas Universitarias / Asesora Comercial (Bumeran)": "Excluyente",
+        "[Real Perú] Caso Mixto (Múltiples Sesgos) — Ayudante de Confección Textil (Computrabajo)": "Femenino",
+        "[Real Perú] Neutro — Asistente Administrativo SAP (Computrabajo)": "Neutro",
+        "[Caso de prueba] Sesgo LGBTQ+ — Profesional en Auditoría Interna": "LGBTQ+",
+    }
 
     for name, text in PRELOADED_EXAMPLES.items():
         res = analyze_job_posting(text, model_key="random_forest")
         assert abs(sum(res.probabilities.values()) - 1.0) < 1e-3, "Probabilidades no suman 1."
         assert set(res.bias_probabilities.keys()) == set(BIAS_CATEGORIES)
+        assert res.predicted_class == expected_categories[name], (
+            f"Categoría inesperada para '{name}': esperado={expected_categories[name]}, obtenido={res.predicted_class}"
+        )
+        if "Caso Mixto" in name:
+            assert len(res.detected_categories) >= 2, (
+                f"Caso Mixto debe detectar >= 2 categorías: {res.detected_categories}"
+            )
 
         rw = rewrite_inclusive(text)
         assert not rw.missing_technical_terms, f"Se perdieron términos técnicos en '{name}': {rw.missing_technical_terms}"

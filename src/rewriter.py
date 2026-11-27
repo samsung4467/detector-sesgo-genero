@@ -159,6 +159,12 @@ REWRITE_RULES: List[Tuple[str, str, str, str]] = [
         "Sustitución de 'personal masculino' por redacción neutra e inclusiva.",
     ),
     (
+        r"\bdamas\s+universitarias\b",
+        "estudiantes universitarios/as",
+        "Excluyente",
+        "Apertura de la convocatoria universitaria a personas de todos los géneros.",
+    ),
+    (
         r"\bpersonal(?:\s+de\s+\w+){0,2}\s+femenino\b",
         "personal calificado",
         "Excluyente",
@@ -576,7 +582,13 @@ REWRITE_RULES: List[Tuple[str, str, str, str]] = [
         "Neutralización de rol subordinado y marca de género femenino.",
     ),
     (
-        r"\b(?:una\s+)?(?:joven\s+)?senorita(?:\s+(?:amable|carismatica|elegante|coqueta|prolija|atenta)(?:\s+y\s+\w+)?)?\b",
+        r"\bsenorit[ao]s\b",
+        "personas postulantes",
+        "Femenino",
+        "Sustitución de 'señoritas' por redacción neutra e inclusiva.",
+    ),
+    (
+        r"\b(?:una\s+)?(?:joven\s+)?senorita(?:\s+(?:amable|carismatica|elegante|coqueta|prolija|atenta|agraciada)(?:\s+y\s+\w+)?)?\b",
         "una persona profesional",
         "Femenino",
         "Reemplazo de trato estereotipado 'señorita'.",
